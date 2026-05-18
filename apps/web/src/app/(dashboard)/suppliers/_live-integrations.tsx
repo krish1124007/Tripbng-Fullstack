@@ -125,7 +125,7 @@ export function LiveIntegrations() {
     list.refetch();
   }
 
-  const rows = list.data?.data ?? [];
+  const rows = list.data ?? [];
   const okCount = rows.filter((r) => r.effective === 'ON').length;
   const offCount = rows.length - okCount;
 
