@@ -304,7 +304,7 @@ function IntegrationCard({
         {row.toggleable ? (
           <Button
             size="sm"
-            variant={row.overrideDisabled ? 'primary' : 'destructive'}
+            variant={row.overrideDisabled ? 'primary' : 'danger'}
             onClick={onToggle}
             disabled={toggling}
             className="flex-1"
