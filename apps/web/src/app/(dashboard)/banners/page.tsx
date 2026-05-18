@@ -453,7 +453,7 @@ function BannerImageField({
     reader.readAsDataURL(file);
   }
 
-  function onDrop(e: React.DragEvent<HTMLDivElement>) {
+  function onDrop(e: React.DragEvent<HTMLLabelElement>) {
     e.preventDefault();
     e.stopPropagation();
     const f = e.dataTransfer.files?.[0];
