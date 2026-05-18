@@ -10,7 +10,6 @@
 //     and takes effect within ~30s across the API fleet)
 //   - product chips so ops can answer "who serves hotels?" at a glance
 
-import { useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
