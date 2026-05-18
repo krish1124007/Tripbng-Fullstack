@@ -1,0 +1,281 @@
+@import './tokens.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    @apply bg-surface-0 text-ink-1 font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01', 'tnum';
+  }
+
+  /* Tabular figures everywhere on numerals — money/PNRs/IDs align across rows. */
+  code,
+  kbd,
+  pre,
+  .font-mono {
+    font-feature-settings: 'tnum';
+  }
+
+  /* Single-ring focus, brand-tinted, no jarring offset. */
+  *:focus-visible {
+    @apply outline-none;
+    box-shadow: var(--shadow-focus-ring), 0 0 0 3px var(--ring);
+  }
+
+  ::selection {
+    background-color: var(--brand-100);
+    color: var(--ink-1);
+  }
+  [data-theme='dark'] ::selection {
+    background-color: var(--brand-200);
+    color: var(--ink-1);
+  }
+
+  /* Thin scrollbars that don't intrude. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--ink-5);
+    border-radius: 999px;
+    border: 2px solid var(--surface-0);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--ink-4);
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border bg-surface-1 shadow-sm;
+  }
+
+  /* Big-number stat with tabular figures + tight tracking. */
+  .stat-number {
+    @apply text-3xl font-bold tabular-nums tracking-tight text-ink-1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Eyebrow label for sections (small caps, brand-tinted). */
+  .eyebrow {
+    @apply text-eyebrow uppercase text-ink-3;
+  }
+
+  /* Frosted topbar / floating panels. */
+  .glass {
+    background: var(--surface-glass);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+  }
+
+  /* Shimmer skeleton — subtle gradient sweep. */
+  .skeleton-shimmer {
+    @apply relative overflow-hidden;
+    background: var(--surface-2);
+  }
+  .skeleton-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.06) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+
+  /* Pulsing dot for "live" / "in-progress" states. */
+  .live-dot {
+    @apply relative inline-flex h-2 w-2 rounded-full;
+  }
+  .live-dot::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.3;
+    animation: pulse-soft 2s ease-in-out infinite;
+  }
+
+  /* Keyboard hint chip. */
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-strong bg-surface-2 px-1.5 font-mono text-[10px] font-medium text-ink-3;
+  }
+
+  /* Flight-search animation — plane glides origin → destination on a loop while
+     the search fan-out runs. Used by <FlightSearchAnimation>. */
+  @keyframes flight-cross {
+    0%   { transform: translateX(0%) translateY(-50%); opacity: 0; }
+    8%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { transform: translateX(calc(100% - 1.25rem)) translateY(-50%); opacity: 0; }
+  }
+  @keyframes contrail-grow {
+    0%   { width: 0%; opacity: 0; }
+    8%   { opacity: 0.6; }
+    100% { width: 100%; opacity: 0.1; }
+  }
+  .animate-flight-cross {
+    animation: flight-cross 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .animate-contrail-grow {
+    animation: contrail-grow 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  /* Respect users with reduced-motion preference — show a static plane and a
+     gentle pulse instead of the cross-screen flight. */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-flight-cross,
+    .animate-contrail-grow {
+      animation: pulse-soft 2s ease-in-out infinite;
+      transform: translateY(-50%);
+    }
+  }
+
+  /* ── Marquee — seamless horizontal scroll. Pair with a 2x-duplicated child
+     list and translate by -50% so the loop point is invisible. */
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+  .animate-marquee {
+    animation: marquee 30s linear infinite;
+  }
+  .animate-marquee-slow {
+    animation: marquee 55s linear infinite;
+  }
+
+  /* ── Floating background orbs — drift gently behind hero / CTA panels.
+     Pair with translate offsets per-instance so each orb traces a different
+     path while sharing one keyframe set. */
+  @keyframes float-orb {
+    0%   { transform: translate3d(0, 0, 0) scale(1); }
+    50%  { transform: translate3d(24px, -36px, 0) scale(1.08); }
+    100% { transform: translate3d(0, 0, 0) scale(1); }
+  }
+  .animate-float-orb {
+    animation: float-orb 9s ease-in-out infinite;
+  }
+  .animate-float-orb-slow {
+    animation: float-orb 14s ease-in-out infinite;
+  }
+
+  /* ── Slow horizontal shimmer for gradient headline text. Background must be
+     a multi-stop gradient at background-size: 200% 100% for the sweep to
+     read. Use with bg-clip-text + text-transparent for the rainbow line. */
+  @keyframes text-shine {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  .animate-text-shine {
+    background-size: 200% auto;
+    animation: text-shine 8s ease-in-out infinite;
+  }
+
+  /* ── Conic gradient that rotates slowly — used as an animated ring around
+     "featured" cards. Apply to an inset-[-1px] wrapper, mask the interior. */
+  @keyframes spin-slow {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .animate-spin-slow {
+    animation: spin-slow 10s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-marquee,
+    .animate-marquee-slow,
+    .animate-float-orb,
+    .animate-float-orb-slow,
+    .animate-text-shine,
+    .animate-spin-slow {
+      animation: none;
+    }
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  /* Hide a scroll container's bar while keeping scroll functionality. Used by
+     ProductTabs and any horizontally-scrollable strip that would otherwise
+     show a thin horizontal scrollbar at the bottom. */
+  .no-scrollbar {
+    -ms-overflow-style: none; /* IE / old Edge */
+    scrollbar-width: none; /* Firefox */
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  /* Brand-mesh hero background (for login, marketing surfaces). */
+  .bg-brand-aurora {
+    background-color: var(--brand-700);
+    background-image:
+      radial-gradient(at 20% 30%, var(--brand-500) 0px, transparent 50%),
+      radial-gradient(at 80% 0%, var(--brand-600) 0px, transparent 50%),
+      radial-gradient(at 0% 90%, var(--accent-600) 0px, transparent 35%),
+      radial-gradient(at 100% 100%, var(--brand-800) 0px, transparent 50%);
+  }
+}
+
+/* ────────── Print styles ──────────
+   Optimised for booking detail / e-ticket / invoice. Strips chrome (sidebar,
+   topbar, mobile-nav, action buttons, banners), forces light theme, expands
+   layout to full width, neutralises shadows. */
+@media print {
+  /* Force light theme regardless of user preference. */
+  :root {
+    color-scheme: light;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  /* Strip everything that's UI-chrome, never document content. */
+  aside,
+  header.glass,
+  nav[aria-label='Primary'],
+  [data-print='hide'],
+  .skeleton-shimmer {
+    display: none !important;
+  }
+  /* Expand the main content; we no longer need max-widths. */
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  /* Cards become flat printable blocks. */
+  .card,
+  [class*='shadow-'] {
+    box-shadow: none !important;
+    border: 1px solid #d1d5db !important;
+  }
+  /* Avoid awkward page breaks inside cards / tables. */
+  .card,
+  table,
+  tr {
+    break-inside: avoid;
+  }
+  /* Make tabular figures crisp. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}

@@ -1,0 +1,247 @@
+// Provider registry — loads enabled gateway configs from PaymentGatewayConfig
+// (Mongo) and constructs per-provider adapter instances on demand.
+//
+// Lifecycle:
+//   - First lookup hydrates from DB + builds adapter (with `select: '+credentials'`).
+//   - Adapter cached per (tenantId, providerCode, environment) for the
+//     duration of the process; admin status changes invalidate the cache via
+//     `resetRegistry()`.
+//
+// When no DB config is found, we fall back to env-driven config so dev
+// environments keep working before any admin row exists. Production should
+// never rely on env fallback — there's a metric we expose for ops.
+
+import { logger } from '../../config/logger.js';
+import { getActiveConfig } from '../../services/payment/payment-config.service.js';
+import {
+  IciciEazypayProvider,
+  type IciciEazypayConfig,
+  type IciciEazypayCredentials,
+} from './icici-eazypay.provider.js';
+import { ManualProvider } from './manual.provider.js';
+import { PhonePeProvider, type PhonePeConfig, type PhonePeCredentials } from './phonepe.provider.js';
+import {
+  RazorpayProvider,
+  type RazorpayConfig,
+  type RazorpayCredentials,
+} from './razorpay.provider.js';
+import {
+  PaymentError,
+  type PaymentProvider,
+  type PaymentProviderCode,
+} from './types.js';
+
+interface CacheEntry {
+  provider: PaymentProvider;
+  configId: string;
+  hydratedAt: number;
+}
+
+const cache = new Map<string, CacheEntry>();
+const TEN_MIN = 10 * 60 * 1000;
+
+function cacheKey(
+  tenantId: string,
+  code: PaymentProviderCode,
+  environment: 'UAT' | 'PROD',
+): string {
+  return `${tenantId}::${code}::${environment}`;
+}
+
+/** Manual is stateless and tenant-agnostic; one instance for all callers. */
+const manualSingleton = new ManualProvider();
+
+export interface GetProviderOptions {
+  tenantId: string;
+  providerCode: PaymentProviderCode;
+  environment?: 'UAT' | 'PROD';
+}
+
+/**
+ * Resolve a configured + active provider for the (tenant, code, env) combo.
+ * Throws PaymentError('NOT_CONFIGURED') if no active row exists AND env
+ * fallback isn't usable.
+ */
+export async function getProvider(opts: GetProviderOptions): Promise<PaymentProvider> {
+  const env = opts.environment ?? (process.env.NODE_ENV === 'production' ? 'PROD' : 'UAT');
+  if (opts.providerCode === 'MANUAL') return manualSingleton;
+
+  const key = cacheKey(opts.tenantId, opts.providerCode, env);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.hydratedAt < TEN_MIN) return hit.provider;
+
+  // DB-first — credentials decrypted via the config service.
+  const active = await getActiveConfig(opts.tenantId, opts.providerCode, env);
+  if (active) {
+    const provider = buildProvider({
+      _id: active.configId,
+      providerCode: opts.providerCode,
+      baseUrl: active.doc.baseUrl,
+      returnUrl: active.doc.returnUrl ?? null,
+      timeoutMs: active.doc.timeoutMs ?? 30_000,
+      credentials: active.credentials,
+    });
+    cache.set(key, { provider, configId: String(active.configId), hydratedAt: Date.now() });
+    return provider;
+  }
+
+  // Env fallback (dev only).
+  const fallback = buildProviderFromEnv(opts.providerCode, env);
+  if (fallback) {
+    logger.warn(
+      { providerCode: opts.providerCode, env },
+      'using env-fallback gateway config — production should use PaymentGatewayConfig in DB',
+    );
+    return fallback;
+  }
+
+  throw new PaymentError(
+    'NOT_CONFIGURED',
+    `No active ${opts.providerCode} config for tenant ${opts.tenantId} (${env})`,
+    opts.providerCode,
+  );
+}
+
+export function resetRegistry(): void {
+  cache.clear();
+}
+
+// ────────── Builders ──────────
+
+interface BuildInput {
+  _id: unknown;
+  providerCode: string;
+  baseUrl: string;
+  returnUrl?: string | null;
+  timeoutMs?: number;
+  credentials: Record<string, unknown>;
+}
+
+function buildProvider(raw: BuildInput): PaymentProvider {
+  const timeoutMs = raw.timeoutMs ?? 30_000;
+  if (raw.providerCode === 'ICICI_EAZYPAY') {
+    const creds = raw.credentials as Partial<IciciEazypayCredentials>;
+    if (!creds.merchantId || !creds.subMerchantId || !creds.encryptionKey || !creds.payMode) {
+      throw new PaymentError(
+        'NOT_CONFIGURED',
+        'ICICI Eazypay credentials incomplete',
+        'ICICI_EAZYPAY',
+      );
+    }
+    const cfg: IciciEazypayConfig = {
+      credentials: creds as IciciEazypayCredentials,
+      baseUrl: raw.baseUrl,
+      returnUrl: raw.returnUrl ?? '',
+      timeoutMs,
+    };
+    return new IciciEazypayProvider(cfg);
+  }
+  if (raw.providerCode === 'PHONEPE') {
+    const creds = raw.credentials as Partial<PhonePeCredentials>;
+    if (!creds.merchantId || !creds.clientId || !creds.clientSecret || !creds.clientVersion) {
+      throw new PaymentError('NOT_CONFIGURED', 'PhonePe credentials incomplete', 'PHONEPE');
+    }
+    const cfg: PhonePeConfig = {
+      credentials: creds as PhonePeCredentials,
+      baseUrl: raw.baseUrl,
+      returnUrl: raw.returnUrl ?? '',
+      timeoutMs,
+    };
+    return new PhonePeProvider(cfg);
+  }
+  if (raw.providerCode === 'RAZORPAY') {
+    const creds = raw.credentials as Partial<RazorpayCredentials>;
+    if (!creds.keyId || !creds.keySecret || !creds.webhookSecret) {
+      throw new PaymentError('NOT_CONFIGURED', 'Razorpay credentials incomplete', 'RAZORPAY');
+    }
+    const cfg: RazorpayConfig = {
+      credentials: creds as RazorpayCredentials,
+      baseUrl: raw.baseUrl,
+      returnUrl: raw.returnUrl ?? '',
+      timeoutMs,
+    };
+    return new RazorpayProvider(cfg);
+  }
+  throw new PaymentError('NOT_CONFIGURED', `Unknown provider ${raw.providerCode}`);
+}
+
+function buildProviderFromEnv(
+  code: PaymentProviderCode,
+  env: 'UAT' | 'PROD',
+): PaymentProvider | null {
+  if (code === 'ICICI_EAZYPAY') {
+    const merchantId = process.env.EAZYPAY_MERCHANT_ID;
+    const subMerchantId = process.env.EAZYPAY_SUB_MERCHANT_ID;
+    const encryptionKey = process.env.EAZYPAY_ENCRYPTION_KEY;
+    const payMode = process.env.EAZYPAY_PAYMODE;
+    const baseUrl =
+      process.env.EAZYPAY_BASE_URL ??
+      (env === 'PROD'
+        ? 'https://eazypay.icicibank.com/EazyPG'
+        : 'https://eazypayuat.icicibank.com/EazyPG');
+    const returnUrl = process.env.EAZYPAY_RETURN_URL;
+    if (!merchantId || !subMerchantId || !encryptionKey || !payMode || !returnUrl) return null;
+    return new IciciEazypayProvider({
+      credentials: { merchantId, subMerchantId, encryptionKey, payMode },
+      baseUrl,
+      returnUrl,
+      timeoutMs: 30_000,
+    });
+  }
+  if (code === 'PHONEPE') {
+    const merchantId = process.env.PHONEPE_MERCHANT_ID;
+    const clientId = process.env.PHONEPE_CLIENT_ID;
+    const clientSecret = process.env.PHONEPE_CLIENT_SECRET;
+    const clientVersion = process.env.PHONEPE_CLIENT_VERSION ?? '1';
+    const webhookUsername = process.env.PHONEPE_WEBHOOK_USERNAME;
+    const webhookPassword = process.env.PHONEPE_WEBHOOK_PASSWORD;
+    const baseUrl =
+      process.env.PHONEPE_BASE_URL ??
+      (env === 'PROD'
+        ? 'https://api.phonepe.com/apis/pg'
+        : 'https://api-preprod.phonepe.com/apis/pg-sandbox');
+    const returnUrl = process.env.PHONEPE_RETURN_URL;
+    if (
+      !merchantId ||
+      !clientId ||
+      !clientSecret ||
+      !webhookUsername ||
+      !webhookPassword ||
+      !returnUrl
+    )
+      return null;
+    return new PhonePeProvider({
+      credentials: {
+        merchantId,
+        clientId,
+        clientSecret,
+        clientVersion,
+        webhookUsername,
+        webhookPassword,
+      },
+      baseUrl,
+      returnUrl,
+      timeoutMs: 30_000,
+    });
+  }
+  if (code === 'RAZORPAY') {
+    // env keys are RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET /
+    // RAZORPAY_WEBHOOK_SECRET (already declared in config/env.ts).
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    // Same host for sandbox + prod — only the keys differ. Default
+    // to the public API host and let an override exist for testing
+    // against razorpay-mocks if anyone ever needs it.
+    const baseUrl = process.env.RAZORPAY_BASE_URL ?? 'https://api.razorpay.com';
+    const returnUrl = process.env.RAZORPAY_RETURN_URL;
+    if (!keyId || !keySecret || !webhookSecret || !returnUrl) return null;
+    return new RazorpayProvider({
+      credentials: { keyId, keySecret, webhookSecret },
+      baseUrl,
+      returnUrl,
+      timeoutMs: 30_000,
+    });
+  }
+  return null;
+}
