@@ -141,7 +141,7 @@ Update the variables to match production settings (replace dummy secrets with st
 NODE_ENV=production
 API_PORT=4000
 API_HOST=0.0.0.0
-API_BASE_URL=https://api.yourdomain.com  # Change to your backend sub-domain
+API_BASE_URL=https://api.tripbng.com  # Change to your backend sub-domain
 
 # Database (connects to the local Docker MongoDB container with replica set)
 MONGO_URI=mongodb://localhost:27017/tripbng_b2b?replicaSet=rs0
@@ -158,7 +158,7 @@ JWT_REFRESH_TTL=7d
 BCRYPT_COST=12
 
 # CORS — comma-separated allowlist
-CORS_ORIGINS=https://yourdomain.com      # Change to your frontend domain
+CORS_ORIGINS=https://partnerhub.tripbng.com      # Change to your frontend domain
 
 LOG_LEVEL=info
 TOTP_ISSUER=TripBng
@@ -172,7 +172,7 @@ nano apps/web/.env
 ```
 Update the variables:
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://api.yourdomain.com   # Points to your backend domain
+NEXT_PUBLIC_API_BASE_URL=https://api.tripbng.com   # Points to your backend domain
 NEXT_PUBLIC_APP_NAME=TripBng
 ```
 
@@ -268,14 +268,14 @@ Nginx will intercept incoming web requests on port `80` (HTTP) and `443` (HTTPS)
     sudo nano /etc/nginx/sites-available/tripbng
     ```
 
-    Paste the following server block, substituting `yourdomain.com` and `api.yourdomain.com` with your actual domain names:
+    Paste the following server block, substituting `partnerhub.tripbng.com` and `api.tripbng.com` with your actual domain names:
     ```nginx
     # ----------------------------------------------------
-    # 1. FRONTEND SERVER (yourdomain.com)
+    # 1. FRONTEND SERVER (partnerhub.tripbng.com)
     # ----------------------------------------------------
     server {
         listen 80;
-        server_name yourdomain.com www.yourdomain.com;
+        server_name partnerhub.tripbng.com www.partnerhub.tripbng.com;
 
         # Frontend Next.js app
         location / {
@@ -292,11 +292,11 @@ Nginx will intercept incoming web requests on port `80` (HTTP) and `443` (HTTPS)
     }
 
     # ----------------------------------------------------
-    # 2. BACKEND API SERVER (api.yourdomain.com)
+    # 2. BACKEND API SERVER (api.tripbng.com)
     # ----------------------------------------------------
     server {
         listen 80;
-        server_name api.yourdomain.com;
+        server_name api.tripbng.com;
 
         # Backend API
         location / {
@@ -339,7 +339,7 @@ Let's encrypt our traffic using free SSL certificates from Certbot.
 
 2.  **Generate Certificates & Configure Nginx automatically**:
     ```bash
-    sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com -d api.yourdomain.com
+    sudo certbot --nginx -d partnerhub.tripbng.com -d www.partnerhub.tripbng.com -d api.tripbng.com
     ```
     *   Follow the prompts (enter email, accept terms).
     *   Select **2** (Redirect all HTTP traffic to HTTPS) to secure your app fully.
@@ -370,8 +370,8 @@ sudo ufw status
 ## 🎉 Deploy Complete!
 
 Your Enterprise B2B platform is now live and fully secure!
-*   **Frontend**: `https://yourdomain.com`
-*   **Backend API**: `https://api.yourdomain.com`
+*   **Frontend**: `https://partnerhub.tripbng.com`
+*   **Backend API**: `https://api.tripbng.com`
 *   **Databases**: MongoDB & Redis are running securely inside Docker behind closed ports.
 
 ---
