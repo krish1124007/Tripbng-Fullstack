@@ -7,7 +7,7 @@ import type { Airport } from '@tripbng/shared';
 // `pnpm --filter @tripbng/api exec tsx src/scripts/fetch-airports.ts` to refresh.
 //
 // Loaded once at boot (~630 KB JSON) — autocomplete is in-memory after that.
-const GENERATED_PATH = resolve(import.meta.dirname, 'airports.generated.json');
+const GENERATED_PATH = resolve(import.meta.dirname, '..', '..', 'src', 'data', 'airports.generated.json');
 const GENERATED: readonly Airport[] = JSON.parse(
   readFileSync(GENERATED_PATH, 'utf-8'),
 ) as Airport[];
