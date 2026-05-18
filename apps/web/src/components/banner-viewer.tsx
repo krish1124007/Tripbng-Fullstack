@@ -49,7 +49,7 @@ export function BannerViewer({ location, maxItems = 3, className }: BannerViewer
     staleTime: 60_000,
   });
 
-  const all = q.data?.data ?? [];
+  const all = q.data ?? [];
 
   // Pull the dismissed-banner set from storage. We re-read on each
   // render because storage may change in another tab; React state

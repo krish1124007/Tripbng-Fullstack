@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Clock,
   CloudOff,
-  Download,
   Fingerprint,
   Plane,
   QrCode,

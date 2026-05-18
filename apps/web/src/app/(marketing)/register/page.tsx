@@ -16,7 +16,7 @@
 // Dev OTP: any non-prod build accepts "000000" so QA can exercise the
 // flow without real SMS/email providers wired.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -29,8 +29,6 @@ import {
   MapPin,
   Network,
   Phone,
-  Receipt,
-  Save,
   ShieldCheck,
   Sparkles,
   Square,
@@ -39,7 +37,7 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Badge, Button, Card } from '@/components/ui';
+import { Button, Card } from '@/components/ui';
 import { Logo } from '@/components/logo';
 import { apiFetch, ApiCallError } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -1203,7 +1201,10 @@ function OtpVerifiable({
   }, [value]);
 
   async function send() {
-    if (!value || value.length < 5) return toast.error(`Enter ${channel} first.`);
+    if (!value || value.length < 5) {
+      toast.error(`Enter ${channel} first.`);
+      return;
+    }
     setSending(true);
     try {
       const r = await apiFetch<{ delivered: boolean; devHint?: string }>(
