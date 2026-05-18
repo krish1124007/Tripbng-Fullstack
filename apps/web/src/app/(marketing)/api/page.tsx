@@ -3,7 +3,6 @@
 import {
   ArrowRight,
   ArrowUpRight,
-  Code2,
   Download,
   Globe,
   KeyRound,
