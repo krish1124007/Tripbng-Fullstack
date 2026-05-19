@@ -25,6 +25,7 @@ export const ERROR_CODES = {
   EMAIL_TAKEN: { http: 409, message: 'An account with this email already exists' },
   MOBILE_TAKEN: { http: 409, message: 'An account with this mobile already exists' },
   IDEMPOTENCY_CONFLICT: { http: 409, message: 'Duplicate request' },
+  TOTP_ALREADY_ENABLED: { http: 409, message: '2FA is already enrolled for this account' },
 
   // 422 — business rule
   INSUFFICIENT_WALLET: { http: 422, message: 'Insufficient wallet balance' },

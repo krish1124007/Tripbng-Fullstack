@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -46,27 +46,32 @@ const VALUE_PROPS = [
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
   const [error, setError] = useState<string | null>(null);
   const [needsTotp, setNeedsTotp] = useState(false);
+  const [needsEnrolment, setNeedsEnrolment] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
     handleSubmit,
     setFocus,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<LoginRequest>({
     resolver: zodResolver(LoginRequestSchema),
-    defaultValues: { email: '', password: '' },
+    defaultValues: { email: searchParams.get('email') ?? '', password: '' },
   });
+  const emailValue = watch('email');
 
   useEffect(() => {
-    setFocus('email');
-  }, [setFocus]);
+    setFocus(searchParams.get('email') ? 'password' : 'email');
+  }, [setFocus, searchParams]);
 
   const onSubmit = handleSubmit(async (values) => {
     setError(null);
+    setNeedsEnrolment(false);
     try {
       const res = await apiFetch<LoginResponse>('/api/v1/auth/login', {
         method: 'POST',
@@ -77,6 +82,16 @@ export default function LoginPage() {
     } catch (err) {
       if (err instanceof ApiCallError) {
         if (err.code === 'TOTP_REQUIRED') {
+          // The API sets `details.enrolUrl` when the account hasn't enrolled
+          // 2FA yet — the user needs to set up an authenticator first, not
+          // type in a code they don't have. We surface a "Set up 2FA" CTA
+          // that deep-links to /setup-2fa with the email pre-filled.
+          const enrolUrl = (err.details as { enrolUrl?: string } | undefined)?.enrolUrl;
+          if (enrolUrl) {
+            setNeedsEnrolment(true);
+            setError('Two-factor authentication is required for this account. Set it up to continue.');
+            return;
+          }
           setNeedsTotp(true);
           setError('Enter your 6-digit authenticator code to continue.');
           return;
@@ -250,6 +265,28 @@ export default function LoginPage() {
                 ) : null}
               </div>
 
+              {needsEnrolment ? (
+                <div className="space-y-3 animate-slide-down rounded-md border border-brand-200 bg-brand-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-brand-700 ring-1 ring-brand-200">
+                      <ShieldCheck className="h-4 w-4" strokeWidth={2} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-bold text-ink-1">Set up two-factor authentication</p>
+                      <p className="mt-0.5 text-xs leading-relaxed text-ink-3">
+                        This account requires 2FA but hasn't been enrolled yet. Scan a QR code
+                        with your authenticator app to finish setup.
+                      </p>
+                    </div>
+                  </div>
+                  <Button asChild size="sm" className="w-full">
+                    <Link href={`/setup-2fa?email=${encodeURIComponent(emailValue ?? '')}`}>
+                      Set up now <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                </div>
+              ) : null}
+
               {needsTotp ? (
                 <div className="space-y-2 animate-slide-down rounded-md border border-brand-200 bg-brand-50 p-4">
                   <Label htmlFor="totp" className="text-sm font-semibold">
@@ -272,7 +309,7 @@ export default function LoginPage() {
                 </div>
               ) : null}
 
-              {error && !needsTotp ? (
+              {error && !needsTotp && !needsEnrolment ? (
                 <div
                   role="alert"
                   className="rounded-md border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger"

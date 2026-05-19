@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   ChangePasswordRequestSchema,
   LoginRequestSchema,
+  TwoFactorBootstrapSetupRequestSchema,
+  TwoFactorBootstrapVerifyRequestSchema,
   TwoFactorVerifyRequestSchema,
   AppError,
   getDefaultPermissionsForRole,
@@ -259,6 +261,90 @@ authRouter.post(
         action: 'auth.2fa.enable',
         resource: 'user',
         resourceId: req.auth!.userId,
+      });
+      return ok(res, { ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// First-time 2FA enrolment (no session token, password-protected).
+//
+// Breaks the chicken-and-egg in production where a freshly-seeded SUPER_ADMIN
+// can't sign in (2FA gate) and can't reach /2fa/setup (auth gate). The two
+// routes below accept email+password instead of a bearer token, and are
+// strictly limited to users who haven't enrolled yet — re-enrolment from this
+// flow is refused so a stolen password can't rotate a victim's authenticator.
+// ─────────────────────────────────────────────────────────────────────────────
+authRouter.post(
+  '/2fa/bootstrap-setup',
+  loginLimiter,
+  validate(TwoFactorBootstrapSetupRequestSchema),
+  async (req, res, next) => {
+    try {
+      const { email, password } = req.body as ReturnType<
+        typeof TwoFactorBootstrapSetupRequestSchema.parse
+      >;
+      const user = await User.findOne({ email }).select(
+        '+passwordHash +pendingTwoFactorSecret',
+      );
+      if (!user) throw new AppError('INVALID_CREDENTIALS');
+      if (user.status === 'SUSPENDED') throw new AppError('ACCOUNT_SUSPENDED');
+      if (user.status === 'BLOCKED') throw new AppError('ACCOUNT_BLOCKED');
+      const passwordOk = await verifyPassword(password, user.passwordHash);
+      if (!passwordOk) throw new AppError('INVALID_CREDENTIALS');
+      if (user.twoFactorEnabled) throw new AppError('TOTP_ALREADY_ENABLED');
+
+      const secret = generateTotpSecret();
+      const otpauthUrl = buildOtpAuthUrl(user.email, secret);
+      const qrDataUrl = await buildQrDataUrl(otpauthUrl);
+      user.pendingTwoFactorSecret = secret;
+      await user.save();
+      return ok(res, { secret, otpauthUrl, qrDataUrl });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+authRouter.post(
+  '/2fa/bootstrap-verify',
+  loginLimiter,
+  validate(TwoFactorBootstrapVerifyRequestSchema),
+  async (req, res, next) => {
+    try {
+      const { email, password, totp } = req.body as ReturnType<
+        typeof TwoFactorBootstrapVerifyRequestSchema.parse
+      >;
+      const user = await User.findOne({ email }).select(
+        '+passwordHash +pendingTwoFactorSecret +twoFactorSecret',
+      );
+      if (!user) throw new AppError('INVALID_CREDENTIALS');
+      if (user.status === 'SUSPENDED') throw new AppError('ACCOUNT_SUSPENDED');
+      if (user.status === 'BLOCKED') throw new AppError('ACCOUNT_BLOCKED');
+      const passwordOk = await verifyPassword(password, user.passwordHash);
+      if (!passwordOk) throw new AppError('INVALID_CREDENTIALS');
+      if (user.twoFactorEnabled) throw new AppError('TOTP_ALREADY_ENABLED');
+      if (!user.pendingTwoFactorSecret || !verifyTotp(totp, user.pendingTwoFactorSecret)) {
+        throw new AppError('INVALID_TOTP');
+      }
+
+      user.twoFactorSecret = user.pendingTwoFactorSecret;
+      user.pendingTwoFactorSecret = null as unknown as string;
+      user.twoFactorEnabled = true;
+      await user.save();
+
+      await recordAudit({
+        tenantId: String(user.tenantId),
+        actorId: String(user._id),
+        actorRole: user.role as Role,
+        action: 'auth.2fa.bootstrap',
+        resource: 'user',
+        resourceId: String(user._id),
+        ip: req.ip ?? null,
+        userAgent: req.header('user-agent') ?? null,
       });
       return ok(res, { ok: true });
     } catch (err) {

@@ -60,3 +60,23 @@ export const TwoFactorVerifyRequestSchema = z.object({
   totp: z.string().regex(/^[0-9]{6}$/),
 });
 export type TwoFactorVerifyRequest = z.infer<typeof TwoFactorVerifyRequestSchema>;
+
+// First-time 2FA enrolment via password (no auth token).
+// Used by the /setup-2fa UI to break the chicken-and-egg in production where
+// SUPER_ADMIN can't sign in without 2FA and can't enrol 2FA without signing in.
+export const TwoFactorBootstrapSetupRequestSchema = z.object({
+  email: EmailSchema,
+  password: z.string().min(1),
+});
+export type TwoFactorBootstrapSetupRequest = z.infer<
+  typeof TwoFactorBootstrapSetupRequestSchema
+>;
+
+export const TwoFactorBootstrapVerifyRequestSchema = z.object({
+  email: EmailSchema,
+  password: z.string().min(1),
+  totp: z.string().regex(/^[0-9]{6}$/),
+});
+export type TwoFactorBootstrapVerifyRequest = z.infer<
+  typeof TwoFactorBootstrapVerifyRequestSchema
+>;

@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "seed": "tsx src/scripts/seed.ts",
+    "enrol:2fa": "tsx src/scripts/enrol-2fa.ts",
     "asego:smoke": "tsx src/scripts/asego-smoke-all.ts",
     "asego:smoke:crypto": "tsx src/scripts/asego-crypto-parity.ts",
     "asego:smoke:master": "tsx src/scripts/asego-smoke.ts",
