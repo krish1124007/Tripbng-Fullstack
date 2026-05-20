@@ -23,6 +23,7 @@ export const QUEUE_NAMES = {
   SEATSELLER_CITY_SYNC: 'seatseller-city-sync',
   WALLET_MONITOR: 'wallet-monitor',
   WALLET_INTEGRITY: 'wallet-integrity',
+  DI_INCENTIVE: 'di-incentive',
   APPROVAL_EXPIRY_SWEEPER: 'approval-expiry-sweeper',
   BUS_OPERATOR_CANCELLATION_POLLER: 'bus-operator-cancellation-poller',
   KAFILA_TICKET_POLL: 'kafila-ticket-poll',
@@ -41,6 +42,7 @@ let tboFlightCancelPollQueue: Queue | null = null;
 let seatsellerCitySyncQueue: Queue | null = null;
 let walletMonitorQueue: Queue | null = null;
 let walletIntegrityQueue: Queue | null = null;
+let diIncentiveQueue: Queue | null = null;
 let approvalExpirySweeperQueue: Queue | null = null;
 let busOperatorCancellationPollerQueue: Queue | null = null;
 let kafilaTicketPollQueue: Queue | null = null;
@@ -144,6 +146,13 @@ export function getWalletIntegrityQueue(): Queue {
     walletIntegrityQueue = new Queue(QUEUE_NAMES.WALLET_INTEGRITY, sharedConnection());
   }
   return walletIntegrityQueue;
+}
+
+export function getDiIncentiveQueue(): Queue {
+  if (!diIncentiveQueue) {
+    diIncentiveQueue = new Queue(QUEUE_NAMES.DI_INCENTIVE, sharedConnection());
+  }
+  return diIncentiveQueue;
 }
 
 export function getApprovalExpirySweeperQueue(): Queue {
@@ -250,6 +259,7 @@ export async function startWorkers(): Promise<void> {
   const { walletIntegrityProcessor, scheduleWalletIntegrity } = await import(
     './wallet-integrity.worker.js'
   );
+  const { diIncentiveProcessor } = await import('./di-incentive.worker.js');
   const { approvalExpirySweeperProcessor, scheduleApprovalExpirySweeper } = await import(
     './approval-expiry-sweeper.worker.js'
   );
@@ -380,6 +390,16 @@ export async function startWorkers(): Promise<void> {
   );
   workers.push(
     new Worker(
+      QUEUE_NAMES.DI_INCENTIVE,
+      diIncentiveProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 5 — the underlying ledger service already serialises
+      // per-agency via Redis lock, so cross-agency parallelism is safe and
+      // desirable when a topup burst lands.
+      { ...opts, concurrency: 5 },
+    ),
+  );
+  workers.push(
+    new Worker(
       QUEUE_NAMES.APPROVAL_EXPIRY_SWEEPER,
       approvalExpirySweeperProcessor as (job: Job) => Promise<unknown>,
       // Concurrency 1 — single Mongo updateMany; concurrency adds nothing.
@@ -460,6 +480,7 @@ export async function stopWorkers(): Promise<void> {
       seatsellerCitySyncQueue,
       walletMonitorQueue,
       walletIntegrityQueue,
+      diIncentiveQueue,
       approvalExpirySweeperQueue,
       busOperatorCancellationPollerQueue,
       kafilaTicketPollQueue,
@@ -480,6 +501,7 @@ export async function stopWorkers(): Promise<void> {
   tboFlightCancelPollQueue = null;
   walletMonitorQueue = null;
   walletIntegrityQueue = null;
+  diIncentiveQueue = null;
   approvalExpirySweeperQueue = null;
   busOperatorCancellationPollerQueue = null;
   kafilaTicketPollQueue = null;

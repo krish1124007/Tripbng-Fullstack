@@ -44,6 +44,8 @@ import { nextCode } from '../../utils/codes.js';
 import { withWalletLock } from '../../utils/wallet-lock.js';
 import { updateWalletWithVersion, withMongoTxn } from '../../utils/mongo-txn.js';
 import { CODE_PREFIX } from '@tripbng/shared';
+import { enqueueDiIncentive } from '../../queues/di-incentive.worker.js';
+import { getDiIncentiveQueue } from '../../queues/index.js';
 
 export type PgGateway = 'ICICI_EAZYPAY' | 'PHONEPE' | 'RAZORPAY' | 'MANUAL';
 
@@ -99,7 +101,7 @@ export async function applyPayment(input: ApplyPaymentInput): Promise<ApplyPayme
   const creditTxnId = await nextCode(CODE_PREFIX.WALLET_TXN);
   const topupTxnId = await nextCode(CODE_PREFIX.WALLET_TXN);
 
-  return withWalletLock(input.agencyId, async () =>
+  const result = await withWalletLock(input.agencyId, async () =>
     withMongoTxn(async (session): Promise<ApplyPaymentResult> => {
       // Re-check inside the lock+txn — protects against two concurrent
       // webhooks both passing the fast-path check at the same instant.
@@ -261,6 +263,50 @@ export async function applyPayment(input: ApplyPaymentInput): Promise<ApplyPayme
       return { applied: true, settlement: settlement[0]!, ledgerEntries };
     }),
   );
+
+  // Post-commit hooks. Only fires for first-time application (applied=true);
+  // duplicate webhooks short-circuited before the txn so we don't re-enqueue.
+  if (result.applied) {
+    await maybeEnqueueDiIncentive(input, result);
+  }
+
+  return result;
+}
+
+/**
+ * If the agency is in DI module and the wallet leg of this payment is non-zero,
+ * enqueue the async incentive worker. We do this AFTER the txn commits so a
+ * rolled-back deposit never triggers an incentive — at-least-once delivery,
+ * idempotent at the worker layer.
+ */
+async function maybeEnqueueDiIncentive(
+  input: ApplyPaymentInput,
+  result: ApplyPaymentResult,
+): Promise<void> {
+  if (result.settlement.agencyModuleAtTime !== 'DI') return;
+  if (result.settlement.amountAppliedToWallet <= 0) return;
+  const topupEntry = result.ledgerEntries.find((e) => e.type === 'TOPUP');
+  if (!topupEntry) return;
+
+  try {
+    await enqueueDiIncentive(getDiIncentiveQueue(), {
+      tenantId: input.tenantId,
+      agencyId: input.agencyId,
+      depositPaise: result.settlement.amountAppliedToWallet,
+      parentLedgerId: String(topupEntry._id),
+      pgReferenceId: input.pgReferenceId,
+      performedBy: input.performedBy,
+      source: 'waterfall',
+    });
+  } catch (err) {
+    // Enqueue failure must not roll back the deposit. The integrity-check
+    // cron and a future replay tool will catch the orphan TOPUP without an
+    // incentive companion — for now, log loud so ops sees the gap.
+    logger.error(
+      { err, agencyId: input.agencyId, parentLedgerId: String(topupEntry._id) },
+      'waterfall: enqueueDiIncentive failed — deposit committed without incentive job',
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

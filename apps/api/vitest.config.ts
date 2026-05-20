@@ -15,6 +15,9 @@ export default defineConfig({
       REDIS_URL: 'redis://localhost:6379',
       JWT_ACCESS_SECRET: 'test-test-test-test-test-test-test-test-test-test',
       JWT_REFRESH_SECRET: 'test-refresh-test-refresh-test-refresh-test-refresh',
+      // Set at vitest.config level so the env module picks it up before any
+      // test imports. /internal/* auth middleware reads this.
+      INTERNAL_API_KEY: 'test-internal-key-min-32-chars-xxxxx',
     },
   },
   resolve: {

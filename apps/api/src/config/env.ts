@@ -149,6 +149,26 @@ const EnvSchema = z.object({
   /** Dedupe window for the "low" tier alert. Critical tier ignores this. */
   WALLET_LOW_ALERT_DEDUPE_HOURS: z.coerce.number().int().min(1).default(24),
 
+  /** Distributor → sub-agent transfers above this threshold require admin
+   *  approval before they hit the ledger. Set high enough to allow normal
+   *  daily working-capital movement to flow unattended (default ₹50,000
+   *  = 5,000,000 paise per AGENCY_WALLET_SYSTEM spec §3.8). */
+  DISTRIBUTOR_TRANSFER_APPROVAL_THRESHOLD_PAISE: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(5_000_000),
+
+  /** Shared-secret authorisation for /internal/* endpoints (booking engine
+   *  → wallet, etc.). When set, calls MUST include the same value in the
+   *  `X-Internal-Key` header. Unset = endpoints reject every request (safe
+   *  default — internal endpoints don't reveal themselves to the web). */
+  INTERNAL_API_KEY: z
+    .string()
+    .min(32)
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+
   // ────────── TripBNG company info (for tax invoices) ──────────
   /** Bill-from legal name on tax invoices. */
   TRIPBNG_LEGAL_NAME: z.string().default('Tankar Solutions Private Limited'),

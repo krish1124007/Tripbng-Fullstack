@@ -36,6 +36,7 @@ import { inquiriesRouter } from './inquiries.routes.js';
 import { registrationsRouter } from './registrations.routes.js';
 import { adminRegistrationsRouter } from './admin-registrations.routes.js';
 import { savedPassengerRouter } from './saved-passenger.routes.js';
+import { internalRouter } from './internal.routes.js';
 
 export const apiRouter: RouterT = Router();
 
@@ -53,6 +54,9 @@ apiRouter.use('/fare-rules', fareRuleRouter);
 apiRouter.use('/policies', policyRouter);
 apiRouter.use('/agency-groups', agencyGroupRouter);
 apiRouter.use('/wallet', walletRouter);
+// /internal/* — booking engine ↔ wallet service-to-service endpoints.
+// Auth via INTERNAL_API_KEY shared secret (see middleware/internal-auth.ts).
+apiRouter.use('/internal', internalRouter);
 apiRouter.use('/search', searchRouter);
 apiRouter.use('/airports', airportRouter);
 
