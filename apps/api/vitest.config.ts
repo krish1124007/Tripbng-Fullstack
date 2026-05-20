@@ -18,6 +18,12 @@ export default defineConfig({
       // Set at vitest.config level so the env module picks it up before any
       // test imports. /internal/* auth middleware reads this.
       INTERNAL_API_KEY: 'test-internal-key-min-32-chars-xxxxx',
+      // Tests cancel bookings ~0ms after ticketing and assert the fare-rule
+      // cancellation fee was applied. With the production default of 4h, every
+      // such cancel falls inside the free-void window and the fee is skipped.
+      // Disable the void window in tests so fee behaviour is deterministic;
+      // tests targeting the void-window behaviour itself can override per-test.
+      TRIPBNG_FLIGHT_VOID_WINDOW_HOURS: '0',
     },
   },
   resolve: {
