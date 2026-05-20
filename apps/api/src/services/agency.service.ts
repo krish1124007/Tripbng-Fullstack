@@ -130,7 +130,21 @@ export async function updateAgency(
   return agency;
 }
 
-export function serializeAgency(agency: AgencyDoc) {
+/**
+ * Serialize an Agency for public API responses.
+ *
+ * `walletBalanceOverride` — Phase-15 cutover plumbing. When provided, this
+ * value (resolved from the canonical `Wallet.balance` via
+ * services/wallet/balance-reader) overrides the legacy
+ * `Agency.walletBalance` field. List/get routes pass the pre-resolved value
+ * in so list views don't need a wallet lookup per row. Single-agency callers
+ * that haven't migrated yet still read the legacy field — same value during
+ * the dual-write window, drops automatically once we delete the field.
+ */
+export function serializeAgency(
+  agency: AgencyDoc,
+  opts: { walletBalanceOverride?: number } = {},
+) {
   return {
     id: String(agency._id),
     agencyCode: agency.agencyCode,
@@ -142,7 +156,7 @@ export function serializeAgency(agency: AgencyDoc) {
     pincode: agency.pincode,
     address: agency.address,
     distributorId: agency.distributorId ? String(agency.distributorId) : null,
-    walletBalance: agency.walletBalance,
+    walletBalance: opts.walletBalanceOverride ?? agency.walletBalance,
     creditLimit: agency.creditLimit,
     outstandingAmount: agency.outstandingAmount,
     status: agency.status,

@@ -9,6 +9,7 @@ import {
 import { Booking } from '../models/Booking.js';
 import { Agency } from '../models/Agency.js';
 import { Amendment } from '../models/Amendment.js';
+import { readAgencyBalances } from './wallet/balance-reader.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -302,12 +303,15 @@ async function runOutstanding(ctx: ReportContext, q: ReportQuery): Promise<Repor
   const agencies = await Agency.find(filter)
     .select('agencyCode companyName creditLimit outstandingAmount walletBalance')
     .lean();
+  // Resolve canonical balances from Wallet (Phase-15) so a 2-week-stale
+  // Agency.walletBalance doesn't show up on the OUTSTANDING report.
+  const balances = await readAgencyBalances(agencies.map((a) => a._id));
   const rows = agencies
     .filter((a) => (a.creditLimit ?? 0) > 0 || (a.outstandingAmount ?? 0) > 0)
     .map((a) => ({
       agencyCode: a.agencyCode,
       agencyName: a.companyName,
-      walletBalancePaise: a.walletBalance ?? 0,
+      walletBalancePaise: balances.get(String(a._id)) ?? a.walletBalance ?? 0,
       creditLimitPaise: a.creditLimit ?? 0,
       outstandingPaise: a.outstandingAmount ?? 0,
       utilisation:
