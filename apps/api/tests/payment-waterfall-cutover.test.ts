@@ -324,8 +324,16 @@ describe('markSuccess — distributor-attributed PT (no agencyId) with flag on',
 
     await paymentService.markSuccess(ptId, { verificationMethod: 'WEBHOOK' });
 
-    // Legacy ledger row in the distributor wallet; no settlement snapshot.
-    const ledger = await WalletTransaction.find({ walletId }).lean();
+    // Legacy ledger row on the distributor wallet; no settlement snapshot.
+    //
+    // NB: WalletTransaction doesn't carry a `walletId` field — the ledger
+    // service stores `agencyId` xor `distributorId` instead. Combined with
+    // `mongoose.set('strictQuery', true)` in db.ts, querying by `walletId`
+    // silently strips the unknown filter and returns every row in the
+    // collection — passes in isolation, fails the moment any sibling test
+    // leaves a stray row. Use distributorId, which is what the schema
+    // actually indexes.
+    const ledger = await WalletTransaction.find({ distributorId }).lean();
     expect(ledger).toHaveLength(1);
     expect(ledger[0]!.type).toBe('TOPUP');
 
