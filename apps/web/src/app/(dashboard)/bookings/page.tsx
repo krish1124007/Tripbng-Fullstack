@@ -81,12 +81,11 @@ export default function BookingsPage() {
             (b as unknown as { productType?: string }).productType === 'HOTEL' ||
             b.flowSubType === ('HOTEL' as never);
           const Icon = isHotel ? HotelIcon : Plane;
-          // Hotel detail page lives under /hotels/[code] — but our hotel
-          // detail page expects a search-cached row keyed by the offer id,
-          // not the booking id. Until a real GET /hotels/bookings/[id] UI
-          // ships, hotel rows on the unified list link back to themselves
-          // and just show the row data; flight rows go to /bookings/[id].
-          const href = isHotel ? `/bookings` : `/bookings/${b.id}`;
+          // Both flight and hotel rows now open the same /bookings/[id]
+          // detail page — the page detects productType=HOTEL and renders
+          // a hotel-shaped layout (stay card instead of itinerary,
+          // confirmation no instead of PNR, no e-Ticket button).
+          const href = `/bookings/${b.id}`;
           return (
             <Link
               href={href}

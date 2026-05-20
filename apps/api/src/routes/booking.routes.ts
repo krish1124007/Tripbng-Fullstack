@@ -361,9 +361,15 @@ bookingRouter.get('/:id', async (req, res, next) => {
     if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
     const filter = listFilter(req.auth!);
     filter._id = req.params.id;
+    // Look up in the flight Booking collection first, then fall back to
+    // HotelBooking. The web's /bookings/[id] page reads PublicBooking and
+    // branches on productType ('FLIGHT' default vs 'HOTEL') for sector,
+    // segments, pricing layout — so we return the same shape either way.
     const b = await Booking.findOne(filter);
-    if (!b) throw new AppError('NOT_FOUND');
-    return ok(res, serializeBooking(b));
+    if (b) return ok(res, serializeBooking(b));
+    const h = await HotelBooking.findOne(filter);
+    if (h) return ok(res, serializeHotelBookingAsPublic(h));
+    throw new AppError('NOT_FOUND');
   } catch (err) {
     next(err);
   }
