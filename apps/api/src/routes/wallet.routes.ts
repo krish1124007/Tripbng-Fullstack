@@ -14,6 +14,7 @@ import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { requireNotFrozen } from '../middleware/cutover-freeze.js';
 import { Agency } from '../models/Agency.js';
 import { Distributor } from '../models/Distributor.js';
 import { TopupRequest } from '../models/TopupRequest.js';
@@ -171,6 +172,7 @@ walletRouter.get('/transactions', validate(WalletQuerySchema, 'query'), async (r
 // Gateway top-ups (PhonePe / ICICI Orange PG) go through POST /api/v1/payments/topups/initiate.
 walletRouter.post(
   '/topup',
+  requireNotFrozen('topup'),
   requirePermission('wallet:topup:request'),
   validate(InitiateTopupRequestSchema),
   async (req, res, next) => {
@@ -221,6 +223,7 @@ walletRouter.get('/topups', async (req, res, next) => {
 
 walletRouter.post(
   '/topups/:id/approve',
+  requireNotFrozen('topup'),
   requirePermission('wallet:topup:approve'),
   validate(ApproveTopupRequestSchema),
   async (req, res, next) => {
@@ -254,6 +257,7 @@ walletRouter.post(
 // POST /wallet/transfer — distributor → agency (or super admin doing the same).
 walletRouter.post(
   '/transfer',
+  requireNotFrozen('transfer'),
   requirePermission('wallet:transfer:to-agency'),
   validate(TransferRequestSchema),
   async (req, res, next) => {
@@ -274,6 +278,7 @@ walletRouter.post(
 
 walletRouter.post(
   '/adjust',
+  requireNotFrozen('topup'),
   requirePermission('wallet:adjust'),
   validate(AdjustWalletRequestSchema),
   async (req, res, next) => {

@@ -107,20 +107,32 @@ Schedule a 30-minute maintenance window. Communicate to agents 24h ahead.
 
 ### 2.1 T-5 min — freeze new bookings + new top-ups
 
-The booking-gate flag lives on `env`; flipping it requires a redeploy.
-Alternatively use Redis as a kill-switch (preferred — no redeploy):
+Redis-backed kill-switch — no redeploy, instant effect:
 
 ```bash
-# Set the cutover kill-switch. The booking + topup routes consult this
-# at request-entry; with it set, both return 503 with a maintenance
-# message until cleared.
+# Set the cutover kill-switch. The booking + topup + transfer routes
+# consult this at request-entry; with it set, all three return 503 with
+# a `Retry-After` header and a `{ code: 'CUTOVER_FREEZE', reason: ... }`
+# JSON envelope until cleared. TTL is the maintenance window length in
+# seconds (1800 = 30 min).
 redis-cli SET wallet:cutover:freeze "in-progress" EX 1800
 ```
 
-> **NOTE:** the kill-switch wiring lives in `booking.service.ts` and
-> `topup.ts` route handlers — confirm it's present in the deployed
-> build before the window starts. Track follow-up: if missing, add a
-> middleware that checks this key in the next release ahead of cutover.
+Wiring lives in `apps/api/src/middleware/cutover-freeze.ts`; it's
+mounted on every wallet-mutating POST in `booking.routes.ts`,
+`bus-bookings.routes.ts`, `wallet.routes.ts`, and `payments.routes.ts`.
+Webhook + payment-advice routes deliberately do NOT consult the
+kill-switch so in-flight payments can drain during the window.
+
+Sanity check the freeze is engaged after setting the key:
+
+```bash
+curl -i -X POST https://api.tripbng.com/api/v1/wallet/topup \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"amountPaise": 100, "paymentMode": "BANK"}'
+# Expect 503 + Retry-After header + body.error.code = "CUTOVER_FREEZE"
+```
 
 ### 2.2 T-0 — verify in-flight payments are drained
 
@@ -261,10 +273,6 @@ redis-cli DEL wallet:cutover:freeze
 
 ## 5. Known unknowns (close before next attempt)
 
-- The cutover-freeze Redis kill-switch is referenced in §2.1 but its
-  wiring in `booking.service.ts` / `topup.ts` is a deferred item.
-  Add the middleware that consults `wallet:cutover:freeze` and
-  returns 503 in a release ahead of the cutover.
 - The `applyPayment` swap in `paymentService.markSuccess` (§2.3) has
   to land as a separate, focused PR — not as part of this runbook.
   Code-review checklist: type errors fixed, `walletTxn._id` still

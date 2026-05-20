@@ -21,6 +21,7 @@ import {
 } from '../services/booking.service.js';
 import { generateETicketPdf, generateInvoicePdf } from '../services/booking-pdf.js';
 import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
+import { requireNotFrozen } from '../middleware/cutover-freeze.js';
 import {
   bannerSnapshotFromDoc,
   selectBannerForBooking,
@@ -78,6 +79,7 @@ bookingRouter.use(authenticate, requireAuth);
 
 bookingRouter.post(
   '/hold',
+  requireNotFrozen('booking'),
   bookingAgencyLimit,
   requirePermission('booking:create'),
   validate(HoldRequestSchema),
@@ -114,6 +116,7 @@ bookingRouter.post(
 
 bookingRouter.post(
   '/confirm',
+  requireNotFrozen('booking'),
   bookingAgencyLimit,
   requirePermission('booking:create'),
   validate(ConfirmBookingRequestSchema),
@@ -213,6 +216,7 @@ bookingRouter.get('/:id', async (req, res, next) => {
 
 bookingRouter.post(
   '/:id/cancel',
+  requireNotFrozen('booking'),
   requirePermission('booking:cancel'),
   validate(CancelBookingRequestSchema),
   async (req, res, next) => {
@@ -251,6 +255,7 @@ bookingRouter.post(
  */
 bookingRouter.post(
   '/:id/refund',
+  requireNotFrozen('booking'),
   requirePermission('booking:refund:manual'),
   validate(ManualRefundRequestSchema),
   async (req, res, next) => {

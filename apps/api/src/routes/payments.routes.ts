@@ -15,6 +15,7 @@ import {
 } from '@tripbng/shared';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { requireNotFrozen } from '../middleware/cutover-freeze.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { logger } from '../config/logger.js';
@@ -315,6 +316,7 @@ const gate = requirePermission('search:flights'); // booking-trade gate; no sepa
 /** POST /api/v1/payments/topups/initiate */
 paymentsRouter.post(
   '/topups/initiate',
+  requireNotFrozen('topup'),
   gate,
   validate(GatewayInitiateTopupRequestSchema),
   async (req, res, next) => {
