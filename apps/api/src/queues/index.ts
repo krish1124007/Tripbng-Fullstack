@@ -25,6 +25,7 @@ export const QUEUE_NAMES = {
   WALLET_INTEGRITY: 'wallet-integrity',
   DI_INCENTIVE: 'di-incentive',
   CREDIT_BLOCK_RECOMPUTE: 'credit-block-recompute',
+  CREDIT_DUE_REMINDER: 'credit-due-reminder',
   APPROVAL_EXPIRY_SWEEPER: 'approval-expiry-sweeper',
   BUS_OPERATOR_CANCELLATION_POLLER: 'bus-operator-cancellation-poller',
   KAFILA_TICKET_POLL: 'kafila-ticket-poll',
@@ -45,6 +46,7 @@ let walletMonitorQueue: Queue | null = null;
 let walletIntegrityQueue: Queue | null = null;
 let diIncentiveQueue: Queue | null = null;
 let creditBlockRecomputeQueue: Queue | null = null;
+let creditDueReminderQueue: Queue | null = null;
 let approvalExpirySweeperQueue: Queue | null = null;
 let busOperatorCancellationPollerQueue: Queue | null = null;
 let kafilaTicketPollQueue: Queue | null = null;
@@ -164,6 +166,13 @@ export function getCreditBlockRecomputeQueue(): Queue {
   return creditBlockRecomputeQueue;
 }
 
+export function getCreditDueReminderQueue(): Queue {
+  if (!creditDueReminderQueue) {
+    creditDueReminderQueue = new Queue(QUEUE_NAMES.CREDIT_DUE_REMINDER, sharedConnection());
+  }
+  return creditDueReminderQueue;
+}
+
 export function getApprovalExpirySweeperQueue(): Queue {
   if (!approvalExpirySweeperQueue) {
     approvalExpirySweeperQueue = new Queue(
@@ -271,6 +280,9 @@ export async function startWorkers(): Promise<void> {
   const { diIncentiveProcessor } = await import('./di-incentive.worker.js');
   const { creditBlockRecomputeProcessor, scheduleCreditBlockRecompute } = await import(
     './credit-block-recompute.worker.js'
+  );
+  const { creditDueReminderProcessor, scheduleCreditDueReminder } = await import(
+    './credit-due-reminder.worker.js'
   );
   const { approvalExpirySweeperProcessor, scheduleApprovalExpirySweeper } = await import(
     './approval-expiry-sweeper.worker.js'
@@ -421,6 +433,15 @@ export async function startWorkers(): Promise<void> {
   );
   workers.push(
     new Worker(
+      QUEUE_NAMES.CREDIT_DUE_REMINDER,
+      creditDueReminderProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — daily sweep, Redis dedupe keys race-tolerant but
+      // logging stays clean with serial execution.
+      { ...opts, concurrency: 1 },
+    ),
+  );
+  workers.push(
+    new Worker(
       QUEUE_NAMES.APPROVAL_EXPIRY_SWEEPER,
       approvalExpirySweeperProcessor as (job: Job) => Promise<unknown>,
       // Concurrency 1 — single Mongo updateMany; concurrency adds nothing.
@@ -478,6 +499,10 @@ export async function startWorkers(): Promise<void> {
   // crossings of credit limit / expiry / due-date.
   await scheduleCreditBlockRecompute(getCreditBlockRecomputeQueue());
 
+  // Credit-due reminder — daily 07:00 IST. T-3 / T-1 / T+0 / T+3 anchors
+  // with Redis dedupe per (agencyId, offset).
+  await scheduleCreditDueReminder(getCreditDueReminderQueue());
+
   // Approval expiry sweeper — every 1 min.
   await scheduleApprovalExpirySweeper(getApprovalExpirySweeperQueue());
 
@@ -507,6 +532,7 @@ export async function stopWorkers(): Promise<void> {
       walletIntegrityQueue,
       diIncentiveQueue,
       creditBlockRecomputeQueue,
+      creditDueReminderQueue,
       approvalExpirySweeperQueue,
       busOperatorCancellationPollerQueue,
       kafilaTicketPollQueue,
@@ -529,6 +555,7 @@ export async function stopWorkers(): Promise<void> {
   walletIntegrityQueue = null;
   diIncentiveQueue = null;
   creditBlockRecomputeQueue = null;
+  creditDueReminderQueue = null;
   approvalExpirySweeperQueue = null;
   busOperatorCancellationPollerQueue = null;
   kafilaTicketPollQueue = null;
