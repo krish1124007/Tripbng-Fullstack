@@ -294,12 +294,36 @@ export function mapFlightAndFareToOption(
     return Number.isFinite(n) ? n : null;
   })();
 
+  // FareType enum → agent-facing label. The labels match the way airlines
+  // typically market these fares; "Retail" stays as-is rather than getting
+  // re-labelled to "Regular" because agents already recognise eTrav's
+  // RetailFare bucket.
+  const fareTypeLabel = ((): string | undefined => {
+    switch (fare.FareType) {
+      case 0:
+        return 'Retail';
+      case 1:
+        return 'Coupon';
+      case 2:
+        return 'Corporate';
+      case 3:
+        return 'SME';
+      case 4:
+        return 'RTSPL';
+      case 5:
+        return 'Deal';
+      default:
+        return undefined;
+    }
+  })();
+
   return {
     supplierFareId: fare.Fare_Id,
     inventoryId: undefined,
     segments,
     travelClass,
     fareClass,
+    fareType: fareTypeLabel,
     perPax: {
       adult: { baseFarePaise: adult.baseFarePaise, taxesPaise: adult.taxesPaise },
       child: { baseFarePaise: child.baseFarePaise, taxesPaise: child.taxesPaise },

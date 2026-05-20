@@ -409,8 +409,13 @@ async function maybeApplyMapPolicy(
     tenantId: ctx.tenantId,
     productType: 'FLIGHT',
     airline,
-    fareType: opt.fareClass ?? null,
+    // Prefer the adapter-emitted fareType (real marketing label) over the
+    // booking-class proxy. Adapters that don't surface fareType fall back
+    // to fareClass so existing fareType configs that pasted in fare-basis
+    // codes keep working.
+    fareType: opt.fareType ?? opt.fareClass ?? null,
     agencyGroupIds,
+    supplierCode: opt.supplierCode,
   });
   if (!policy) return result;
 

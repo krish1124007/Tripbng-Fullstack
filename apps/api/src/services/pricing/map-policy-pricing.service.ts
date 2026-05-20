@@ -38,19 +38,28 @@
 //   carries `hidden: true` when hideFromAgent is set so the booking UI can
 //   suppress the line item but the math doesn't change.
 //
-// V1 limitations
-// --------------
-//   - criteria.mapSourceIds is recorded but NOT consulted at match time —
-//     a policy with mapSourceIds set still matches by airline/fareType/
-//     agencyGroup. Filtering by Map Source needs a join we haven't wired
-//     yet; planned for a follow-up phase.
-//   - criteria.fareTypes matches against `option.fareClass` because
-//     NormalizedFareOption doesn't carry a separate `fareType` field yet
-//     (same gap noted in the Phase-5 matcher).
+// Match semantics for criteria.mapSourceIds
+// -----------------------------------------
+// A policy with `criteria.mapSourceIds = [src1, src2, …]` matches a booking
+// only when the booking's supplier is the same as the supplier of at least
+// one of those Map Sources. The check requires the caller to pass
+// `supplierCode` on the resolver input; legacy callers that omit it skip
+// the criterion entirely (back-compat — the resolver never used to know
+// the supplier).
+//
+// Match semantics for criteria.fareTypes
+// --------------------------------------
+// The caller passes the BEST fare-type signal it has: prefer
+// NormalizedFareOption.fareType (real airline-marketed label) and fall back
+// to fareClass (supplier booking-class code) when an adapter doesn't surface
+// the marketing label. Existing configs that pasted booking-class codes
+// into criteria.fareTypes keep matching against the fareClass fallback.
 
 import type { FareBreakdown } from '@tripbng/shared';
 import { MapPolicy, type MapPolicyDoc } from '../../models/MapPolicy.js';
 import { Policy } from '../../models/Policy.js';
+import { Supplier } from '../../models/Supplier.js';
+import { SupplierSource } from '../../models/SupplierSource.js';
 import { logger } from '../../config/logger.js';
 
 export interface ResolveMapPolicyInput {
@@ -59,6 +68,12 @@ export interface ResolveMapPolicyInput {
   airline: string;
   fareType: string | null | undefined;
   agencyGroupIds: string[];
+  /** Supplier code from the search result, e.g. "KAFILA". When provided,
+   *  policies with `criteria.mapSourceIds` are filtered to those whose
+   *  referenced Map Sources belong to this supplier. When absent, the
+   *  mapSourceIds criterion is ignored (legacy / safe-default behaviour
+   *  documented in Phase 8's V1-limitations notes). */
+  supplierCode?: string | null;
 }
 
 /**
@@ -79,9 +94,52 @@ export async function resolveMapPolicy(
     .sort({ priority: 1, createdAt: -1 })
     .lean()) as unknown as MapPolicyDoc[];
 
+  if (candidates.length === 0) return null;
+
   const airline = input.airline.toUpperCase();
   const fareType = input.fareType?.toLowerCase() ?? null;
   const agencyGroupSet = new Set(input.agencyGroupIds);
+
+  // Pre-flight: if the supplierCode is known and any candidate policy has
+  // criteria.mapSourceIds set, resolve the supplier_id for this booking
+  // and the supplier_ids each referenced Map Source belongs to — once,
+  // up-front. Avoids N+1 lookups inside the per-candidate loop.
+  let bookingSupplierIdStr: string | null = null;
+  const mapSourceToSupplierId: Map<string, string> = new Map();
+  const candidatesWithSourceFilter = candidates.filter((p) => {
+    const ids = ((p as unknown as { criteria?: { mapSourceIds?: unknown[] } })
+      .criteria?.mapSourceIds ?? []) as Array<{ toString(): string }>;
+    return ids.length > 0;
+  });
+  if (input.supplierCode && candidatesWithSourceFilter.length > 0) {
+    const supplier = await Supplier.findOne({
+      tenantId: input.tenantId,
+      code: input.supplierCode,
+    })
+      .select({ _id: 1 })
+      .lean();
+    bookingSupplierIdStr = supplier?._id.toString() ?? null;
+
+    const allMapSourceIds = Array.from(
+      new Set(
+        candidatesWithSourceFilter.flatMap((p) =>
+          (
+            ((p as unknown as { criteria?: { mapSourceIds?: Array<{ toString(): string }> } })
+              .criteria?.mapSourceIds ?? [])
+          ).map((id) => id.toString()),
+        ),
+      ),
+    );
+    const sources = await SupplierSource.find({
+      _id: { $in: allMapSourceIds },
+      tenantId: input.tenantId,
+    })
+      .select({ _id: 1, supplierId: 1 })
+      .lean();
+    for (const s of sources) {
+      mapSourceToSupplierId.set(s._id.toString(), s.supplierId.toString());
+    }
+  }
 
   for (const p of candidates) {
     const c = (p as unknown as { criteria?: Record<string, unknown> }).criteria ?? {};
@@ -103,6 +161,21 @@ export async function resolveMapPolicy(
       (g) => g.toString(),
     );
     if (groups.length > 0 && !groups.some((g) => agencyGroupSet.has(g))) continue;
+
+    // mapSourceIds — when set, match only when the booking's supplier owns
+    // at least one of the referenced Map Sources. Legacy callers that don't
+    // pass `supplierCode` skip the criterion entirely (back-compat — the
+    // resolver never used to know the supplier; flipping to strict-deny
+    // would silently drop matches for any caller that hasn't been updated).
+    const mapSourceIds = ((c.mapSourceIds as Array<{ toString(): string }> | undefined) ?? []).map(
+      (id) => id.toString(),
+    );
+    if (mapSourceIds.length > 0 && input.supplierCode && bookingSupplierIdStr) {
+      const allowedSupplierIds = new Set(
+        mapSourceIds.map((id) => mapSourceToSupplierId.get(id)).filter((v): v is string => Boolean(v)),
+      );
+      if (!allowedSupplierIds.has(bookingSupplierIdStr)) continue;
+    }
 
     return p;
   }

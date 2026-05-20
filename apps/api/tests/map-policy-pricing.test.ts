@@ -14,6 +14,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { connectMongo, disconnectMongo } from '../src/config/db.js';
 import { Tenant } from '../src/models/Tenant.js';
 import { AgencyGroup } from '../src/models/AgencyGroup.js';
+import { Supplier } from '../src/models/Supplier.js';
+import { SupplierSource } from '../src/models/SupplierSource.js';
 import { MapPolicy, type MapPolicyDoc } from '../src/models/MapPolicy.js';
 import {
   applyMapPolicyToBreakdown,
@@ -42,6 +44,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await MapPolicy.deleteMany({ tenantId });
+  await SupplierSource.deleteMany({ tenantId });
+  await Supplier.deleteMany({ tenantId });
   await AgencyGroup.deleteMany({ tenantId });
   await Tenant.deleteOne({ _id: tenantId });
   await disconnectMongo();
@@ -49,6 +53,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await MapPolicy.deleteMany({ tenantId });
+  await SupplierSource.deleteMany({ tenantId });
+  await Supplier.deleteMany({ tenantId });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +191,135 @@ describe('resolveMapPolicy', () => {
     });
     const found = await resolveMapPolicy(baseInput());
     expect(found?.name).toBe('high');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveMapPolicy — criteria.mapSourceIds matching (follow-up of Phase 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolveMapPolicy — criteria.mapSourceIds gate', () => {
+  it('matches when the booking supplier corresponds to one of the referenced Map Sources', async () => {
+    const kafila = await Supplier.create({
+      tenantId,
+      code: 'KAFILA',
+      name: 'Kafila',
+      type: 'CONSOLIDATOR',
+      productTypes: ['FLIGHT'],
+      config: { endpoint: 'https://example.invalid' },
+      status: 'ACTIVE',
+    });
+    const src = await SupplierSource.create({
+      tenantId,
+      supplierId: kafila._id,
+      name: 'Kafila Intl',
+      productType: 'FLIGHT',
+      travelType: 'INTERNATIONAL',
+    });
+    await MapPolicy.create({
+      tenantId,
+      name: 'Kafila-only',
+      productType: 'FLIGHT',
+      commission: { enabled: true, payoutPercent: 70 },
+      criteria: { mapSourceIds: [src._id] },
+    });
+    // Without supplierCode: criterion ignored (legacy behaviour) — matches.
+    expect(
+      (await resolveMapPolicy({ ...baseInput(), agencyGroupIds: [] }))?.name,
+    ).toBe('Kafila-only');
+    // With matching supplier code: still matches.
+    expect(
+      (await resolveMapPolicy({
+        ...baseInput(),
+        agencyGroupIds: [],
+        supplierCode: 'KAFILA',
+      }))?.name,
+    ).toBe('Kafila-only');
+  });
+
+  it('does NOT match when supplierCode is provided but no referenced Map Source belongs to that supplier', async () => {
+    const kafila = await Supplier.create({
+      tenantId,
+      code: 'KAFILA',
+      name: 'Kafila',
+      type: 'CONSOLIDATOR',
+      productTypes: ['FLIGHT'],
+      config: { endpoint: 'https://example.invalid' },
+      status: 'ACTIVE',
+    });
+    const etrav = await Supplier.create({
+      tenantId,
+      code: 'ETRAV',
+      name: 'eTrav',
+      type: 'CONSOLIDATOR',
+      productTypes: ['FLIGHT'],
+      config: { endpoint: 'https://example.invalid' },
+      status: 'ACTIVE',
+    });
+    const kafilaSrc = await SupplierSource.create({
+      tenantId,
+      supplierId: kafila._id,
+      name: 'Kafila Intl',
+      productType: 'FLIGHT',
+      travelType: 'INTERNATIONAL',
+    });
+    await MapPolicy.create({
+      tenantId,
+      name: 'Kafila-scoped',
+      productType: 'FLIGHT',
+      commission: { enabled: true, payoutPercent: 70 },
+      criteria: { mapSourceIds: [kafilaSrc._id] },
+    });
+    // Booking from eTrav — Kafila-scoped policy must NOT match.
+    expect(
+      await resolveMapPolicy({
+        ...baseInput(),
+        agencyGroupIds: [],
+        supplierCode: 'ETRAV',
+      }),
+    ).toBeNull();
+    // sanity — etrav supplier exists in DB
+    expect(etrav).toBeTruthy();
+  });
+
+  it('matches when the supplier owns ANY of the listed Map Sources', async () => {
+    const sup = await Supplier.create({
+      tenantId,
+      code: 'KAFILA',
+      name: 'Kafila',
+      type: 'CONSOLIDATOR',
+      productTypes: ['FLIGHT'],
+      config: { endpoint: 'https://example.invalid' },
+      status: 'ACTIVE',
+    });
+    const a = await SupplierSource.create({
+      tenantId,
+      supplierId: sup._id,
+      name: 'Kafila Domestic',
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+    });
+    const b = await SupplierSource.create({
+      tenantId,
+      supplierId: sup._id,
+      name: 'Kafila International',
+      productType: 'FLIGHT',
+      travelType: 'INTERNATIONAL',
+    });
+    await MapPolicy.create({
+      tenantId,
+      name: 'Kafila-both',
+      productType: 'FLIGHT',
+      commission: { enabled: true, payoutPercent: 70 },
+      criteria: { mapSourceIds: [a._id, b._id] },
+    });
+    expect(
+      (await resolveMapPolicy({
+        ...baseInput(),
+        agencyGroupIds: [],
+        supplierCode: 'KAFILA',
+      }))?.name,
+    ).toBe('Kafila-both');
   });
 });
 

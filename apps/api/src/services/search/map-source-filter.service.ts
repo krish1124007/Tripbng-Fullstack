@@ -157,10 +157,19 @@ export async function applyMapSourceFilter(
     }
 
     // Mask + hide + restrict-travel — apply UNIONed across matching rows.
+    //
+    // Two separate tracks now that adapters surface a real fareType:
+    //   - fareClass goes through `maskBookingClassCodes` (supplier code rewrites)
+    //   - fareType goes through `maskFareTypes` (agent-facing label rewrites)
+    //   - hideFareTypes drops by the post-mask fareType, falling back to the
+    //     post-mask fareClass when the adapter didn't surface a fareType
+    //     (e.g. TBO, Series). This keeps existing configs that hid by
+    //     fareBasis working unchanged.
     let workingFareClass = opt.fareClass ?? null;
+    let workingFareType = opt.fareType ?? null;
 
-    // 1) Mask booking-class codes — rewrites fareClass if the original
-    //    matches. First matching rule wins (deterministic).
+    // 1a) Mask booking-class codes — rewrites fareClass. First matching rule
+    //     wins (deterministic).
     for (const s of matching) {
       const masks =
         ((s as unknown as { maskBookingClassCodes?: Array<{ original: string; masked: string }> })
@@ -174,33 +183,46 @@ export async function applyMapSourceFilter(
         break;
       }
     }
-    // NB: maskFareTypes is the same shape and would target a separate
-    // `fareType` field. The current NormalizedFareOption shape doesn't carry
-    // a distinct fareType — `fareClass` covers both. We honour the rule:
-    // running it through the booking-class table is consistent and existing
-    // configs that pre-populate maskFareTypes will be tried below if the
-    // booking-class table didn't match.
-    if (workingFareClass) {
+
+    // 1b) Mask fare types — rewrites fareType. First matching rule wins.
+    //     Falls back to fareClass if the adapter didn't surface a fareType,
+    //     keeping pre-Item-2 configs functional (admins who pasted booking
+    //     classes into the fareType mask table still see their masks fire).
+    if (workingFareType || workingFareClass) {
+      const target = (workingFareType ?? workingFareClass ?? '').toUpperCase();
       for (const s of matching) {
         const masks =
           ((s as unknown as { maskFareTypes?: Array<{ original: string; masked: string }> })
             .maskFareTypes ?? []);
-        const hit = masks.find((m) => m.original.toUpperCase() === workingFareClass!.toUpperCase());
-        if (hit && workingFareClass !== hit.masked) {
-          workingFareClass = hit.masked;
-          masked++;
+        const hit = masks.find((m) => m.original.toUpperCase() === target);
+        if (hit) {
+          if (workingFareType) {
+            if (workingFareType !== hit.masked) {
+              workingFareType = hit.masked;
+              masked++;
+            }
+          } else {
+            // Adapter didn't supply fareType — rewrite the fareClass we
+            // matched against.
+            if (workingFareClass !== hit.masked) {
+              workingFareClass = hit.masked;
+              masked++;
+            }
+          }
           break;
         }
       }
     }
 
-    // 2) Hide fare types — drop the option if (post-mask) fareClass matches
-    //    any of the hide entries across matching rows. Case-insensitive.
-    if (workingFareClass) {
+    // 2) Hide fare types — drop when the post-mask fareType matches any
+    //    hide entry across matching rows. Falls back to fareClass for
+    //    adapters that don't surface a fareType. Case-insensitive.
+    const hideTarget = (workingFareType ?? workingFareClass ?? '').toLowerCase();
+    if (hideTarget) {
       const hides = matching.flatMap(
         (s) => (s as unknown as { hideFareTypes?: string[] }).hideFareTypes ?? [],
       );
-      if (hides.some((h) => h.toLowerCase() === workingFareClass!.toLowerCase())) {
+      if (hides.some((h) => h.toLowerCase() === hideTarget)) {
         dropped[opt.supplierCode] = (dropped[opt.supplierCode] ?? 0) + 1;
         continue;
       }
@@ -252,7 +274,11 @@ export async function applyMapSourceFilter(
       }
     }
 
-    survivors.push({ ...opt, fareClass: workingFareClass ?? undefined });
+    survivors.push({
+      ...opt,
+      fareClass: workingFareClass ?? undefined,
+      fareType: workingFareType ?? undefined,
+    });
   }
 
   if (applied && (Object.keys(dropped).length > 0 || masked > 0)) {

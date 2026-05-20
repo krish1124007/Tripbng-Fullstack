@@ -212,6 +212,10 @@ export function mapItineraryAndFareToOption(
     segments,
     travelClass: fromAirIQCabinClass(itin.Segments?.[0]?.CabinClass),
     fareClass,
+    // AirIQ exposes a marketing-style fare type as FareName — pass it
+    // through directly. The whitelist of values isn't fixed (it's whatever
+    // the airline's distribution config produced), so we trust the string.
+    fareType: fare.FareName ?? undefined,
     perPax: {
       adult: { baseFarePaise: adult.baseFarePaise, taxesPaise: adult.taxesPaise },
       child: { baseFarePaise: child.baseFarePaise, taxesPaise: child.taxesPaise },

@@ -59,6 +59,7 @@ beforeEach(async () => {
 interface OptOverrides {
   airline?: string;
   fareClass?: string;
+  fareType?: string;
   departureIso?: string;
   supplierCode?: string;
 }
@@ -70,6 +71,7 @@ function makeOption(overrides: OptOverrides = {}): FanoutFareOption {
     supplierFareId: `sf-${crypto.randomBytes(3).toString('hex')}`,
     supplierCode: overrides.supplierCode ?? SUPPLIER_CODE,
     fareClass: overrides.fareClass,
+    fareType: overrides.fareType,
     segments: [
       {
         flightNumber: `${airline}-100`,
@@ -485,5 +487,116 @@ describe('applyMapSourceFilter — multiple Map Source rows union the whitelist'
       },
     );
     expect(result.options.map((o) => o.segments[0]!.airline.code).sort()).toEqual(['6E', 'AI', 'IX']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Follow-up of Phase 4 — fareType-driven masking + hiding
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('applyMapSourceFilter — fareType targeting', () => {
+  it('maskFareTypes rewrites option.fareType when supplied by the adapter', async () => {
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      airlineCodes: ['AI'],
+      maskFareTypes: [{ original: 'INSTANT_OFFER', masked: 'Promo' }],
+    });
+    const result = await applyMapSourceFilter(
+      [
+        makeOption({ airline: 'AI', fareType: 'INSTANT_OFFER', fareClass: 'YA' }),
+        makeOption({ airline: 'AI', fareType: 'Retail', fareClass: 'M' }),
+      ],
+      {
+        tenantId: String(tenantId),
+        agencyGroupIds: [],
+        productType: 'FLIGHT',
+        travelType: 'DOMESTIC',
+      },
+    );
+    // fareType rewritten on the matching row; fareClass untouched.
+    expect(result.options[0]?.fareType).toBe('Promo');
+    expect(result.options[0]?.fareClass).toBe('YA');
+    // No match → fareType passes through.
+    expect(result.options[1]?.fareType).toBe('Retail');
+    expect(result.masked).toBe(1);
+  });
+
+  it('hideFareTypes drops by fareType when present', async () => {
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      airlineCodes: ['AI'],
+      hideFareTypes: ['SME'],
+    });
+    const result = await applyMapSourceFilter(
+      [
+        makeOption({ airline: 'AI', fareType: 'Retail' }),
+        makeOption({ airline: 'AI', fareType: 'SME' }),
+        makeOption({ airline: 'AI', fareType: 'sme' }), // case-insensitive
+      ],
+      {
+        tenantId: String(tenantId),
+        agencyGroupIds: [],
+        productType: 'FLIGHT',
+        travelType: 'DOMESTIC',
+      },
+    );
+    expect(result.options.map((o) => o.fareType)).toEqual(['Retail']);
+  });
+
+  it('falls back to fareClass when the adapter did NOT surface a fareType', async () => {
+    // Pre-Item-2 configs that pasted booking-class codes into hideFareTypes
+    // must keep working for adapters (TBO, Series) that don't carry a
+    // fareType.
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      airlineCodes: ['AI'],
+      hideFareTypes: ['SME'],
+    });
+    const result = await applyMapSourceFilter(
+      [
+        makeOption({ airline: 'AI', fareClass: 'Regular' }), // no fareType
+        makeOption({ airline: 'AI', fareClass: 'SME' }), // no fareType — falls back
+      ],
+      {
+        tenantId: String(tenantId),
+        agencyGroupIds: [],
+        productType: 'FLIGHT',
+        travelType: 'DOMESTIC',
+      },
+    );
+    expect(result.options.map((o) => o.fareClass)).toEqual(['Regular']);
+  });
+
+  it('mask rewrites then hide checks the post-mask fareType', async () => {
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      airlineCodes: ['AI'],
+      maskFareTypes: [{ original: 'INSTANT_OFFER', masked: 'PROMO_HIDDEN' }],
+      hideFareTypes: ['PROMO_HIDDEN'],
+    });
+    const result = await applyMapSourceFilter(
+      [makeOption({ airline: 'AI', fareType: 'INSTANT_OFFER' })],
+      {
+        tenantId: String(tenantId),
+        agencyGroupIds: [],
+        productType: 'FLIGHT',
+        travelType: 'DOMESTIC',
+      },
+    );
+    // The mask rewrites INSTANT_OFFER → PROMO_HIDDEN, then the hide rule
+    // catches the rewritten value and drops the option.
+    expect(result.options).toHaveLength(0);
   });
 });
