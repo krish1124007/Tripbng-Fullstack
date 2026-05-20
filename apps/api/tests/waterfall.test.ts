@@ -15,7 +15,8 @@ import { Wallet } from '../src/models/Wallet.js';
 import { WalletTransaction } from '../src/models/WalletTransaction.js';
 import { CreditSettlement } from '../src/models/CreditSettlement.js';
 import { Counter } from '../src/models/Counter.js';
-import { applyPayment } from '../src/services/wallet/waterfall.service.js';
+import { applyPayment, simulatePayment } from '../src/services/wallet/waterfall.service.js';
+import { DepositIncentiveConfig } from '../src/models/DepositIncentiveConfig.js';
 
 let tenantId: Types.ObjectId;
 const userId = new Types.ObjectId();
@@ -75,6 +76,7 @@ afterAll(async () => {
   await WalletTransaction.deleteMany({ tenantId });
   await CreditSettlement.deleteMany({ tenantId });
   await Wallet.deleteMany({ tenantId });
+  await DepositIncentiveConfig.deleteMany({ tenantId });
   await Agency.deleteMany({ tenantId });
   await Counter.deleteMany({});
   await Tenant.deleteOne({ _id: tenantId });
@@ -85,6 +87,7 @@ beforeEach(async () => {
   await WalletTransaction.deleteMany({ tenantId });
   await CreditSettlement.deleteMany({ tenantId });
   await Wallet.deleteMany({ tenantId });
+  await DepositIncentiveConfig.deleteMany({ tenantId });
   await Agency.deleteMany({ tenantId });
 });
 
@@ -341,6 +344,204 @@ describe('WaterfallService.applyPayment', () => {
         agencyId: String(agencyId),
         amountPaise: 1_000,
         pgReferenceId: '',
+        pgGateway: 'PHONEPE',
+        performedBy: String(userId),
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// simulatePayment — pure read-only counterpart used by SHADOW_WALLET mode
+// (Phase 9, AGENCY_WALLET_SYSTEM spec §18). Must produce the same split
+// numbers applyPayment would, without writing anything.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('WaterfallService.simulatePayment', () => {
+  it('CASH module: full amount classified as wallet, no DI incentive', async () => {
+    const { agencyId } = await makeAgencyWithWallet('CASH', 250_000);
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 50_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'PHONEPE',
+      performedBy: String(userId),
+    });
+
+    expect(sim.module).toBe('CASH');
+    expect(sim.amountReceivedPaise).toBe(50_000);
+    expect(sim.appliedToCreditPaise).toBe(0);
+    expect(sim.appliedToWalletPaise).toBe(50_000);
+    expect(sim.walletBalanceBeforePaise).toBe(250_000);
+    expect(sim.creditUsedBeforePaise).toBe(0);
+    expect(sim.diIncentive).toBeNull();
+  });
+
+  it('CREDIT module with outstanding: splits between credit and wallet', async () => {
+    const { agencyId } = await makeAgencyWithWallet('CREDIT', 100_000, 60_000);
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 100_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'ICICI_ORANGE_PG',
+      performedBy: String(userId),
+    });
+
+    expect(sim.module).toBe('CREDIT');
+    expect(sim.appliedToCreditPaise).toBe(60_000);
+    expect(sim.appliedToWalletPaise).toBe(40_000);
+    expect(sim.creditUsedBeforePaise).toBe(60_000);
+  });
+
+  it('CREDIT module with no outstanding: full amount to wallet', async () => {
+    const { agencyId } = await makeAgencyWithWallet('CREDIT', 100_000, 0);
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 100_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'ICICI_ORANGE_PG',
+      performedBy: String(userId),
+    });
+
+    expect(sim.appliedToCreditPaise).toBe(0);
+    expect(sim.appliedToWalletPaise).toBe(100_000);
+  });
+
+  it('CREDIT module: payment smaller than outstanding — all to credit, 0 to wallet', async () => {
+    const { agencyId } = await makeAgencyWithWallet('CREDIT', 0, 100_000);
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 40_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'ICICI_ORANGE_PG',
+      performedBy: String(userId),
+    });
+
+    expect(sim.appliedToCreditPaise).toBe(40_000);
+    expect(sim.appliedToWalletPaise).toBe(0);
+  });
+
+  it('DI module with active config: computes incentive + TDS', async () => {
+    const { agencyId } = await makeAgencyWithWallet('DI', 0);
+    // 1% percent incentive on deposit, with 2% TDS on the gross incentive.
+    await DepositIncentiveConfig.create({
+      tenantId,
+      agencyId,
+      isActive: true,
+      incentiveMode: 'PERCENT',
+      incentiveBasisPoints: 100,        // 1.00%
+      tdsApplicable: true,
+      tdsBasisPoints: 200,              // 2.00%
+      validFrom: new Date(Date.now() - 86400_000),
+      validTo: null,
+    });
+
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 10_000_000,          // ₹1,00,000
+      pgReferenceId: pgRef(),
+      pgGateway: 'PHONEPE',
+      performedBy: String(userId),
+    });
+
+    expect(sim.module).toBe('DI');
+    expect(sim.appliedToWalletPaise).toBe(10_000_000);
+    expect(sim.diIncentive).not.toBeNull();
+    expect(sim.diIncentive?.incentivePaise).toBe(100_000); // 1% of ₹1L = ₹1,000
+    expect(sim.diIncentive?.tdsPaise).toBe(2_000);          // 2% of ₹1,000 = ₹20
+    expect(sim.diIncentive?.netCreditPaise).toBe(98_000);   // ₹980
+  });
+
+  it('DI module with no matching config: returns NO_CONFIG skip', async () => {
+    const { agencyId } = await makeAgencyWithWallet('DI', 0);
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 100_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'PHONEPE',
+      performedBy: String(userId),
+    });
+
+    expect(sim.module).toBe('DI');
+    expect(sim.appliedToWalletPaise).toBe(100_000);
+    expect(sim.diIncentive).toEqual({
+      incentivePaise: 0,
+      tdsPaise: 0,
+      netCreditPaise: 0,
+      skip: 'NO_CONFIG',
+    });
+  });
+
+  it('is genuinely read-only: no Wallet / WalletTransaction / CreditSettlement writes', async () => {
+    const { agencyId } = await makeAgencyWithWallet('CREDIT', 100_000, 60_000);
+
+    const txnsBefore = await WalletTransaction.countDocuments({ tenantId });
+    const settlementsBefore = await CreditSettlement.countDocuments({ tenantId });
+    const walletBefore = await Wallet.findOne({ agencyId }).lean();
+
+    await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      amountPaise: 100_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'ICICI_ORANGE_PG',
+      performedBy: String(userId),
+    });
+
+    const txnsAfter = await WalletTransaction.countDocuments({ tenantId });
+    const settlementsAfter = await CreditSettlement.countDocuments({ tenantId });
+    const walletAfter = await Wallet.findOne({ agencyId }).lean();
+
+    expect(txnsAfter).toBe(txnsBefore);
+    expect(settlementsAfter).toBe(settlementsBefore);
+    expect(walletAfter?.balance).toBe(walletBefore?.balance);
+    expect(walletAfter?.creditUsed).toBe(walletBefore?.creditUsed);
+    expect(walletAfter?.version).toBe(walletBefore?.version);
+  });
+
+  it('matches applyPayment split numbers for the same input', async () => {
+    // Same fixture, same input → simulate and apply must report identical
+    // appliedToCredit / appliedToWallet numbers. Catches drift between the
+    // two code paths (which is the whole point of shadow mode).
+    const { agencyId: simAgency } = await makeAgencyWithWallet('CREDIT', 100_000, 40_000);
+    const { agencyId: applyAgency } = await makeAgencyWithWallet('CREDIT', 100_000, 40_000);
+
+    const sim = await simulatePayment({
+      tenantId: String(tenantId),
+      agencyId: String(simAgency),
+      amountPaise: 75_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'ICICI_ORANGE_PG',
+      performedBy: String(userId),
+    });
+
+    const apply = await applyPayment({
+      tenantId: String(tenantId),
+      agencyId: String(applyAgency),
+      amountPaise: 75_000,
+      pgReferenceId: pgRef(),
+      pgGateway: 'ICICI_ORANGE_PG',
+      performedBy: String(userId),
+    });
+
+    expect(sim.appliedToCreditPaise).toBe(apply.settlement.amountAppliedToCredit);
+    expect(sim.appliedToWalletPaise).toBe(apply.settlement.amountAppliedToWallet);
+  });
+
+  it('rejects missing agency the same way applyPayment does', async () => {
+    const ghostAgencyId = new Types.ObjectId();
+    await expect(
+      simulatePayment({
+        tenantId: String(tenantId),
+        agencyId: String(ghostAgencyId),
+        amountPaise: 1_000,
+        pgReferenceId: pgRef(),
         pgGateway: 'PHONEPE',
         performedBy: String(userId),
       }),

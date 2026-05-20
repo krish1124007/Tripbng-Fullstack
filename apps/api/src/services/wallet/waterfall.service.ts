@@ -46,6 +46,7 @@ import { updateWalletWithVersion, withMongoTxn } from '../../utils/mongo-txn.js'
 import { CODE_PREFIX } from '@tripbng/shared';
 import { enqueueDiIncentive } from '../../queues/di-incentive.worker.js';
 import { getDiIncentiveQueue } from '../../queues/index.js';
+import { computeIncentive, resolveActiveConfig } from './di-incentive.service.js';
 
 export type PgGateway = 'ICICI_ORANGE_PG' | 'PHONEPE' | 'MANUAL';
 
@@ -271,6 +272,100 @@ export async function applyPayment(input: ApplyPaymentInput): Promise<ApplyPayme
   }
 
   return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// simulatePayment — pure, read-only twin of applyPayment.
+//
+// Used by the SHADOW_WALLET mode during the Phase-9 observation window. The
+// payment service calls this AFTER the legacy walletService.credit has run,
+// so the comparison logs show: "legacy did X, waterfall would have done Y".
+// No locks, no transactions, no writes — repeatable from a replica read.
+//
+// We don't try to reproduce the idempotency short-circuit here; the caller
+// already knows whether the underlying payment was newly applied or a
+// duplicate, and a duplicate by definition wouldn't have re-run the split.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SimulatePaymentResult {
+  /** Agency module read at simulation time. */
+  module: AgencyModule;
+  /** Amount the gateway confirmed (paise) — echoed back for clarity. */
+  amountReceivedPaise: number;
+  /** What the waterfall would have settled against outstanding credit (paise). */
+  appliedToCreditPaise: number;
+  /** What the waterfall would have credited to the wallet (paise). */
+  appliedToWalletPaise: number;
+  /** Pre-state — useful when the comparison log reads odd. */
+  walletBalanceBeforePaise: number;
+  creditUsedBeforePaise: number;
+  /** DI module: incentive computation (or null if not applicable / skipped). */
+  diIncentive: {
+    incentivePaise: number;
+    tdsPaise: number;
+    netCreditPaise: number;
+    skip?: 'INACTIVE' | 'BELOW_MIN' | 'ZERO_INCENTIVE' | 'NO_CONFIG';
+  } | null;
+}
+
+/**
+ * Compute what `applyPayment` would have produced for the given input,
+ * without writing anything. Reads `Agency.module` and `Wallet.{balance,creditUsed}`
+ * — that's it. Designed for SHADOW_WALLET log comparison against the live
+ * legacy credit path.
+ */
+export async function simulatePayment(input: ApplyPaymentInput): Promise<SimulatePaymentResult> {
+  validateInput(input);
+
+  const agency = await Agency.findById(input.agencyId).select('_id module').lean();
+  if (!agency) throw new AppError('AGENCY_NOT_FOUND');
+  const module = (agency.module ?? 'CASH') as AgencyModule;
+
+  const wallet = await Wallet.findOne({ agencyId: input.agencyId })
+    .select('balance creditUsed')
+    .lean();
+  const walletBalanceBefore = wallet?.balance ?? 0;
+  const creditUsedBefore = wallet?.creditUsed ?? 0;
+
+  const totalReceived = Money.fromNumberPaise(input.amountPaise);
+  const walletBeforeM = Money.fromNumberPaise(walletBalanceBefore);
+  const creditUsedBeforeM = Money.fromNumberPaise(creditUsedBefore);
+
+  let toCredit = Money.ZERO;
+  let toWallet = totalReceived;
+  if (module === 'CREDIT' && Money.isPositive(creditUsedBeforeM)) {
+    toCredit = Money.min(totalReceived, creditUsedBeforeM);
+    toWallet = Money.sub(totalReceived, toCredit);
+  }
+
+  let diIncentive: SimulatePaymentResult['diIncentive'] = null;
+  if (module === 'DI' && Money.isPositive(toWallet)) {
+    const config = await resolveActiveConfig(input.tenantId, input.agencyId);
+    if (!config) {
+      diIncentive = { incentivePaise: 0, tdsPaise: 0, netCreditPaise: 0, skip: 'NO_CONFIG' };
+    } else {
+      const compute = computeIncentive(config, Money.toNumberPaise(toWallet));
+      diIncentive = {
+        incentivePaise: compute.incentivePaise,
+        tdsPaise: compute.tdsPaise,
+        netCreditPaise: compute.netCreditPaise,
+        ...(compute.skip ? { skip: compute.skip } : {}),
+      };
+    }
+  }
+
+  // Mark agency as referenced so the linter is happy about the destructured _id.
+  void walletBeforeM;
+
+  return {
+    module,
+    amountReceivedPaise: input.amountPaise,
+    appliedToCreditPaise: Money.toNumberPaise(toCredit),
+    appliedToWalletPaise: Money.toNumberPaise(toWallet),
+    walletBalanceBeforePaise: walletBalanceBefore,
+    creditUsedBeforePaise: creditUsedBefore,
+    diIncentive,
+  };
 }
 
 /**

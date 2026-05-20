@@ -178,6 +178,18 @@ const EnvSchema = z.object({
   /** Dedupe window for the "low" tier alert. Critical tier ignores this. */
   WALLET_LOW_ALERT_DEDUPE_HOURS: z.coerce.number().int().min(1).default(24),
 
+  /** Shadow-mode flag for the wallet waterfall (Phase 9, AGENCY_WALLET_SYSTEM
+   *  spec §18). When true, every successful payment also computes what the
+   *  new waterfall WOULD have produced for the split (credit settlement +
+   *  wallet portion + DI incentive + TDS) and emits a structured log line.
+   *  No DB writes from the simulation. Stays on for ~2 weeks of observation;
+   *  flipping false ahead of cutover, then to "active" once the legacy
+   *  walletService.credit call is swapped for waterfall.applyPayment. */
+  SHADOW_WALLET: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .default(false)
+    .transform((v) => v === true || v === 'true'),
+
   /** Distributor → sub-agent transfers above this threshold require admin
    *  approval before they hit the ledger. Set high enough to allow normal
    *  daily working-capital movement to flow unattended (default ₹50,000

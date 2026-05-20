@@ -27,6 +27,8 @@ import { isValidTransition, PaymentError, type PaymentProviderCode } from '../..
 import { walletService } from './wallet.service.js';
 import { Actor, EVENTS, track } from '../analytics.service.js';
 import { enqueueAlert } from '../alerts/index.js';
+import { env } from '../../config/env.js';
+import { simulatePayment } from '../wallet/waterfall.service.js';
 
 export interface InitiateTopupInput {
   walletId: Types.ObjectId;
@@ -229,6 +231,64 @@ export class PaymentService {
       },
       'payment success',
     );
+
+    // ────────── SHADOW_WALLET observation log (Phase 9, spec §18) ──────────
+    //
+    // The legacy walletService.credit above does a flat "amount → wallet"
+    // top-up. The waterfall (waterfall.service.ts:applyPayment) would split
+    // the same payment across credit-settlement + wallet + DI incentive + TDS
+    // based on the agency's module. We're not ready to swap the live path
+    // yet — but for the 2-week shadow window we run simulatePayment() AFTER
+    // the legacy credit and emit a single structured log line that ops can
+    // diff against the real ledger. Failures here MUST NOT poison a
+    // successful payment, so the whole block is fire-and-forget under
+    // try/catch.
+    //
+    // Note: the agency cache state at this point already reflects the legacy
+    // credit (Wallet.balance += amount); the simulation reads Wallet but
+    // computes its split against `creditUsed` and `Agency.module`, neither
+    // of which the legacy credit touches. So the comparison is meaningful.
+    if (env.SHADOW_WALLET && pt.agencyId) {
+      const agencyId = pt.agencyId.toHexString();
+      const tenantId = pt.tenantId.toHexString();
+      void (async () => {
+        try {
+          const sim = await simulatePayment({
+            tenantId,
+            agencyId,
+            amountPaise: pt.amount,
+            pgReferenceId: pt.gatewayTxnId ?? `pt-${pt._id.toHexString()}`,
+            pgGateway: pt.providerCode as 'ICICI_ORANGE_PG' | 'PHONEPE' | 'MANUAL',
+            performedBy: pt.initiatedByUserId.toHexString(),
+          });
+          logger.info(
+            {
+              shadow: true,
+              ptId: pt._id.toHexString(),
+              txnCode: pt.txnCode,
+              agencyId,
+              module: sim.module,
+              amountPaise: sim.amountReceivedPaise,
+              legacyCreditedToWalletPaise: pt.amount,
+              waterfallAppliedToCreditPaise: sim.appliedToCreditPaise,
+              waterfallAppliedToWalletPaise: sim.appliedToWalletPaise,
+              walletBalanceBeforePaise: sim.walletBalanceBeforePaise,
+              creditUsedBeforePaise: sim.creditUsedBeforePaise,
+              diIncentive: sim.diIncentive,
+              // Drift flag: if these don't match, the agency would have
+              // received a different settlement under the waterfall.
+              wouldHaveDiverged: sim.appliedToCreditPaise > 0 || sim.diIncentive !== null,
+            },
+            'shadow.waterfall: simulation completed',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, ptId: pt._id.toHexString(), agencyId },
+            'shadow.waterfall: simulation failed — payment was still credited via legacy path',
+          );
+        }
+      })();
+    }
 
     track({
       event: EVENTS.TOPUP_SUCCEEDED,
