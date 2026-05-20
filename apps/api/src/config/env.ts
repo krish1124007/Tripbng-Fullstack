@@ -190,6 +190,22 @@ const EnvSchema = z.object({
     .default(false)
     .transform((v) => v === true || v === 'true'),
 
+  /** Live cutover for the wallet waterfall (Phase 13, AGENCY_WALLET_SYSTEM
+   *  spec §3.1). When true, paymentService.markSuccess routes every
+   *  agency-attributed successful payment through waterfall.applyPayment
+   *  instead of the legacy walletService.credit. This activates:
+   *    • Credit-settlement split for CREDIT-module agencies
+   *    • CreditSettlement snapshot rows
+   *    • Async DI incentive worker hand-off
+   *  Distributor / user-attributed top-ups (no agencyId on the PT) keep
+   *  using the legacy path — the waterfall only knows about agencies.
+   *  When WATERFALL_LIVE=true, SHADOW_WALLET is automatically a no-op
+   *  (the comparison log would be reading the wrong baseline). */
+  WATERFALL_LIVE: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .default(false)
+    .transform((v) => v === true || v === 'true'),
+
   /** Distributor → sub-agent transfers above this threshold require admin
    *  approval before they hit the ledger. Set high enough to allow normal
    *  daily working-capital movement to flow unattended (default ₹50,000
