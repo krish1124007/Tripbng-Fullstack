@@ -26,6 +26,7 @@ import type { Readable } from 'node:stream';
 import type { BookingDoc } from '../models/Booking.js';
 import type { HotelBookingDoc } from '../models/HotelBooking.js';
 import type { HolidayBookingDoc } from '../models/HolidayBooking.js';
+import type { VisaBookingDoc } from '../models/VisaBooking.js';
 
 const PAGE_W = 595;
 const PAGE_H = 842;
@@ -1435,6 +1436,126 @@ export function generateHolidayInvoicePdf(booking: HolidayBookingDoc): Readable 
     rows.push([
       `Child w/o bed × ${booking.childrenWithoutBed}`,
       (booking.pricing!.perChildNoBedPaise ?? 0) * (booking.childrenWithoutBed ?? 0),
+    ]);
+  }
+  if ((booking.pricing?.gstPaise ?? 0) > 0) {
+    rows.push(['GST', booking.pricing!.gstPaise ?? 0]);
+  }
+  for (const [label, value] of rows) {
+    doc.text(label, 48, doc.y, { continued: true });
+    doc.text(rupees(value), { align: 'right' });
+  }
+
+  doc.moveDown(0.4);
+  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
+  doc.moveDown(0.4);
+
+  doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
+  doc.text(rupees(booking.pricing?.totalPaise ?? 0), { align: 'right' });
+
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(i);
+    doc
+      .fillColor(C.ink3)
+      .fontSize(8)
+      .text(`Page ${i + 1} of ${range.count} · TripBng`, 48, 800, { align: 'center', width: 499 });
+  }
+  doc.end();
+  return stream;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visa invoice PDF — application-style invoice for a visa booking. Pulls
+// product / country / processing mode / applicants / fee breakdown out of
+// the VisaBooking row. Same pdfkit-A4 template as the other product
+// invoices.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function generateVisaInvoicePdf(booking: VisaBookingDoc): Readable {
+  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
+  const stream = doc as unknown as Readable;
+
+  doc.fontSize(20).fillColor(C.ink1).text('Tax Invoice — Visa', 48, 48);
+  doc.fontSize(10).fillColor(C.ink3).text('Computer-generated, no signature required', 48, 72);
+
+  doc.moveDown(1.2);
+  const code = booking.bookingCode ?? String(booking._id);
+  doc.fillColor(C.ink1).fontSize(11).text(`Invoice for ${code}`, 48);
+  doc.fontSize(10).fillColor(C.ink3);
+  doc.text(`Issued: ${fmtDateTime(booking.confirmedAt ?? booking.createdAt)}`);
+  doc.text(`Application: ${booking.supplierRefs?.applicationNo ?? '—'}`);
+
+  doc.moveDown(0.6);
+  doc.fillColor(C.ink2).fontSize(10).text('PRODUCT');
+  doc.moveDown(0.2);
+  doc.fillColor(C.ink1).fontSize(11).text(booking.productName);
+  doc
+    .fillColor(C.ink3)
+    .fontSize(9)
+    .text(
+      `${booking.countryName ?? '—'} · ${booking.purpose ?? 'tourist'} · ${
+        booking.processingMode ?? 'e-visa'
+      } · ${booking.entryType ?? 'single'}-entry`,
+    );
+
+  doc.moveDown(0.6);
+  doc.fillColor(C.ink2).fontSize(10).text('VALIDITY');
+  doc.moveDown(0.2);
+  doc.fillColor(C.ink1).fontSize(10);
+  doc.text(`Stay:        up to ${booking.stayDays} days`);
+  doc.text(`Validity:    ${booking.validityDays} days from issue`);
+  doc.text(`Processing:  ${booking.processingDays} working days${booking.urgent ? ' (URGENT)' : ''}`);
+  if (booking.expectedTravelDate) {
+    doc.text(`Expected travel: ${fmtDateTime(booking.expectedTravelDate)}`);
+  }
+
+  if ((booking.applicants ?? []).length > 0) {
+    doc.moveDown(0.6);
+    doc.fillColor(C.ink2).fontSize(10).text('APPLICANTS');
+    doc.moveDown(0.2);
+    doc.fillColor(C.ink1).fontSize(10);
+    for (const a of booking.applicants ?? []) {
+      doc.text(
+        `${a.title ?? ''} ${a.firstName ?? ''} ${a.lastName ?? ''}`.trim() +
+          ` · ${a.paxType ?? 'ADT'} · ${a.nationality ?? 'IN'}`,
+      );
+    }
+  }
+
+  if (booking.gst?.gstin) {
+    doc.moveDown(0.6);
+    doc.fillColor(C.ink2).fontSize(10).text('GST DETAILS');
+    doc.fillColor(C.ink1).fontSize(10).text(`GSTIN: ${booking.gst.gstin}`);
+    if (booking.gst.companyName) doc.text(`Company: ${booking.gst.companyName}`);
+    if (booking.gst.companyAddress) doc.text(`Address: ${booking.gst.companyAddress}`);
+  }
+
+  doc.moveDown(0.8);
+  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
+  doc.moveDown(0.6);
+
+  doc.fillColor(C.ink2).fontSize(10).text('SUMMARY');
+  doc.moveDown(0.3);
+  doc.fillColor(C.ink1).fontSize(10);
+  const applicantCount = booking.pricing?.applicants ?? (booking.applicants ?? []).length;
+  const rows: [string, number][] = [];
+  if ((booking.pricing?.consulateFeePaise ?? 0) > 0) {
+    rows.push([
+      `Consulate fee × ${applicantCount}`,
+      (booking.pricing!.consulateFeePaise ?? 0) * applicantCount,
+    ]);
+  }
+  if ((booking.pricing?.serviceFeePaise ?? 0) > 0) {
+    rows.push([
+      `Service fee × ${applicantCount}`,
+      (booking.pricing!.serviceFeePaise ?? 0) * applicantCount,
+    ]);
+  }
+  if ((booking.pricing?.urgentSurchargePaise ?? 0) > 0) {
+    rows.push([
+      `Urgent surcharge × ${applicantCount}`,
+      (booking.pricing!.urgentSurchargePaise ?? 0) * applicantCount,
     ]);
   }
   if ((booking.pricing?.gstPaise ?? 0) > 0) {

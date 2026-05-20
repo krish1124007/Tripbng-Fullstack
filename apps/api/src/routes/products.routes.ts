@@ -33,6 +33,7 @@ import {
 } from '../services/products.service.js';
 import { getPublicPackage, listPublicPackages } from '../services/holidayPackage.service.js';
 import { HolidayBooking } from '../models/HolidayBooking.js';
+import { VisaBooking } from '../models/VisaBooking.js';
 import { walletService } from '../services/payment/wallet.service.js';
 import { nextCode } from '../utils/codes.js';
 import { Types } from 'mongoose';
@@ -418,6 +419,193 @@ productsRouter.get(
       const { countryId } = req.params as unknown as z.infer<typeof VisaCountryParamsSchema>;
       const products = await listProductsForCountry(tenantId, countryId);
       return ok(res, { countryId, products });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ────────── VISA QUICK-BOOK ──────────
+//
+// Mock-aware shortcut to file a visa application + debit the agency wallet
+// in one round-trip. Mirrors the holiday quick-book pattern — no embassy
+// portal call yet, just a CONFIRMED VisaBooking + ledger entry. Real
+// embassy/VFS wiring would replace the inline confirmation with an async
+// supplier call + document-upload portal.
+
+const VisaQuickBookSchema = z.object({
+  productId: z.string().min(1).max(120),
+  urgent: z.boolean().default(false),
+  expectedTravelDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  agreedTotalInr: z.number().int().positive(),
+  applicants: z
+    .array(
+      z.object({
+        title: z.enum(['Mr', 'Mrs', 'Miss', 'Ms', 'Mstr']),
+        firstName: z.string().min(1).max(60),
+        lastName: z.string().min(1).max(60),
+        paxType: z.enum(['ADT', 'CHD', 'INF']).default('ADT'),
+        isLeadPassenger: z.boolean().optional(),
+        email: z.string().email().optional().nullable(),
+        phone: z.string().max(20).optional().nullable(),
+        nationality: z.string().length(2).default('IN'),
+        passportNumber: z.string().min(4).max(20).optional().nullable(),
+        passportExpiry: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+productsRouter.post(
+  '/visa/quick-book',
+  gate,
+  validate(VisaQuickBookSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth!.agencyId) {
+        throw new AppError('VALIDATION_ERROR', {
+          reason: 'Visa bookings require an agency wallet context. Log in as an agency user.',
+        });
+      }
+      const body = req.body as z.infer<typeof VisaQuickBookSchema>;
+      const product = await getPublicProduct(req.auth!.tenantId, body.productId);
+      if (!product) {
+        throw new AppError('NOT_FOUND', { reason: 'visa product not found or unpublished' });
+      }
+
+      // Pick the matching priceMatrix row by applicant count, falling back
+      // to the product-level consulate/service fees.
+      const applicantCount = body.applicants.length;
+      const matrix = product.priceMatrix.find(
+        (r) => applicantCount >= r.fromPax && applicantCount <= r.toPax,
+      );
+      const consulateFeeInr = matrix?.consulateFeeInr ?? product.consulateFeeInr ?? 0;
+      const serviceFeeInr = matrix?.serviceFeeInr ?? product.serviceFeeInr ?? 0;
+      const urgentSurchargeInr = body.urgent
+        ? matrix?.urgentSurchargeInr ?? product.urgentSurchargeInr ?? 0
+        : 0;
+      const perApplicantInr = consulateFeeInr + serviceFeeInr + urgentSurchargeInr;
+      const subtotalInr = perApplicantInr * applicantCount;
+      const drift = Math.abs(subtotalInr - body.agreedTotalInr) / Math.max(subtotalInr, 1);
+      if (drift > 0.05) {
+        logger.warn(
+          { subtotalInr, agreedTotalInr: body.agreedTotalInr },
+          'visa quick-book: price drift > 5% — using server number',
+        );
+      }
+      const totalPaise = subtotalInr * 100;
+
+      const wallet = await walletService.findOrCreateForAgency(
+        new Types.ObjectId(req.auth!.tenantId),
+        new Types.ObjectId(req.auth!.agencyId),
+      );
+
+      const seq = await nextCode('TBNG');
+      const bookingCode = `${seq}-VIS`;
+
+      const expected = body.expectedTravelDate
+        ? new Date(`${body.expectedTravelDate}T00:00:00.000Z`)
+        : new Date(Date.now() + (product.processingDays ?? 7) * 24 * 60 * 60 * 1000);
+
+      const booking = await VisaBooking.create({
+        tenantId: req.auth!.tenantId,
+        agencyId: req.auth!.agencyId,
+        distributorId: req.auth!.distributorId ?? null,
+        bookedByUserId: req.auth!.userId,
+        productId: product.id,
+        productName: product.name,
+        countryId: product.countryId ?? null,
+        countryName: product.countryName ?? null,
+        countryIso2: product.countryIso2 ?? null,
+        region: product.region ?? null,
+        purpose: product.purpose,
+        processingMode: product.processingMode,
+        entryType: product.entryType,
+        validityDays: product.validityDays,
+        stayDays: product.stayDays,
+        processingDays: product.processingDays,
+        bannerImage: product.bannerImage ?? null,
+        expectedTravelDate: expected,
+        urgent: body.urgent,
+        applicants: body.applicants.map((a, idx) => ({
+          ...a,
+          isLeadPassenger: a.isLeadPassenger ?? idx === 0,
+          passportExpiry: a.passportExpiry
+            ? new Date(`${a.passportExpiry}T00:00:00.000Z`)
+            : null,
+        })),
+        currency: 'INR',
+        pricing: {
+          consulateFeePaise: consulateFeeInr * 100,
+          serviceFeePaise: serviceFeeInr * 100,
+          urgentSurchargePaise: urgentSurchargeInr * 100,
+          perApplicantPaise: perApplicantInr * 100,
+          applicants: applicantCount,
+          subtotalPaise: totalPaise,
+          gstPaise: 0,
+          totalPaise,
+        },
+        supplier: 'MOCK',
+        supplierRefs: {
+          applicationNo: `VIS${Math.floor(Math.random() * 1e8)
+            .toString()
+            .padStart(8, '0')}`,
+          portalRef: `MOCK-${randomUUID().slice(0, 8).toUpperCase()}`,
+        },
+        bookingCode,
+        status: 'CONFIRMED',
+        statusHistory: [
+          { status: 'DRAFT', at: new Date(), by: new Types.ObjectId(req.auth!.userId) },
+          { status: 'CONFIRMED', at: new Date(), by: new Types.ObjectId(req.auth!.userId) },
+        ],
+        confirmedAt: new Date(),
+      });
+
+      try {
+        await walletService.debit({
+          walletId: wallet._id,
+          amount: totalPaise,
+          type: 'BOOKING_DEBIT',
+          description: `Visa ${bookingCode} — ${product.name}`,
+          performedBy: new Types.ObjectId(req.auth!.userId),
+          bookingId: booking._id,
+          idempotencyKey: `visa-book-${booking._id.toHexString()}`,
+          metadata: {
+            productId: product.id,
+            productName: product.name,
+            countryIso2: product.countryIso2,
+            urgent: body.urgent,
+            applicants: applicantCount,
+          },
+        });
+      } catch (err) {
+        booking.status = 'BOOK_FAILED';
+        booking.statusHistory.push({
+          status: 'BOOK_FAILED',
+          at: new Date(),
+          by: new Types.ObjectId(req.auth!.userId),
+          note: err instanceof Error ? err.message.slice(0, 200) : 'wallet debit failed',
+        });
+        await booking.save();
+        throw err;
+      }
+
+      logger.info(
+        { bookingId: String(booking._id), bookingCode, productId: product.id, totalPaise },
+        'visa quick-book: confirmed + paid',
+      );
+
+      return ok(res, {
+        id: String(booking._id),
+        bookingCode,
+        status: booking.status,
+        supplierRefs: booking.supplierRefs,
+        productName: product.name,
+        countryName: product.countryName,
+        applicants: applicantCount,
+        pricing: booking.pricing,
+      });
     } catch (err) {
       next(err);
     }

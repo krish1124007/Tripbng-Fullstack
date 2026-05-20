@@ -13,6 +13,7 @@ import {
   PlaneTakeoff,
   Rows3,
   Search,
+  StickyNote as VisaIcon,
   Table as TableIcon,
 } from 'lucide-react';
 import type { PublicBooking } from '@tripbng/shared';
@@ -78,11 +79,18 @@ export default function BookingsPage() {
           const isHotel = productType === 'HOTEL' || b.flowSubType === ('HOTEL' as never);
           const isHoliday =
             productType === 'HOLIDAY' || b.flowSubType === ('HOLIDAY' as never);
-          const Icon = isHotel || isHoliday ? HotelIcon : Plane;
+          const isVisa = productType === 'VISA' || b.flowSubType === ('VISA' as never);
+          const Icon = isVisa
+            ? VisaIcon
+            : isHotel || isHoliday
+              ? HotelIcon
+              : Plane;
           // All product types now open /bookings/[id] — the detail page
           // discriminates on productType and renders flight / hotel /
-          // holiday layouts accordingly.
+          // holiday / visa layouts accordingly.
           const href = `/bookings/${b.id}`;
+          const isNonFlight = isHotel || isHoliday || isVisa;
+          const refLabel = isVisa ? 'App' : isNonFlight ? 'Conf' : 'PNR';
           return (
             <Link
               href={href}
@@ -94,7 +102,7 @@ export default function BookingsPage() {
               <div className="min-w-0">
                 <p className="font-mono text-xs font-bold text-ink-1">{b.bookingCode}</p>
                 <p className="font-mono text-[10px] text-ink-3">
-                  {isHotel || isHoliday ? 'Conf' : 'PNR'} {b.pnr ?? '—'}
+                  {refLabel} {b.pnr ?? '—'}
                 </p>
               </div>
             </Link>

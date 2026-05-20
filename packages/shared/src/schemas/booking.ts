@@ -100,11 +100,11 @@ export const PublicBookingSchema = z.object({
   // their respective merge adapters) carry 'HOTEL' / 'HOLIDAY' so the
   // web UI can swap itinerary cards for product-specific layouts and
   // re-label PNR → Confirmation.
-  productType: z.enum(['FLIGHT', 'HOTEL', 'HOLIDAY']).default('FLIGHT'),
+  productType: z.enum(['FLIGHT', 'HOTEL', 'HOLIDAY', 'VISA']).default('FLIGHT'),
   // Flight-side flow tag (LCC / FSC / etc) — for non-flight rows we
   // surface the product name as a backup discriminator before
   // productType was added.
-  flowSubType: z.enum(['SERIES', 'LCC', 'FSC', 'HOLD', 'TICKET', 'HOTEL', 'HOLIDAY']),
+  flowSubType: z.enum(['SERIES', 'LCC', 'FSC', 'HOLD', 'TICKET', 'HOTEL', 'HOLIDAY', 'VISA']),
 
   pnr: z.string().nullable(),
   airlinePnr: z.string().nullable(),

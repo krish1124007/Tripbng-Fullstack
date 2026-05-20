@@ -16,6 +16,7 @@ import { ok, created } from '../utils/response.js';
 import { Booking } from '../models/Booking.js';
 import { HotelBooking, type HotelBookingDoc } from '../models/HotelBooking.js';
 import { HolidayBooking, type HolidayBookingDoc } from '../models/HolidayBooking.js';
+import { VisaBooking, type VisaBookingDoc } from '../models/VisaBooking.js';
 import {
   cancelBooking,
   confirmBooking,
@@ -28,6 +29,7 @@ import {
   generateHolidayInvoicePdf,
   generateHotelInvoicePdf,
   generateInvoicePdf,
+  generateVisaInvoicePdf,
 } from '../services/booking-pdf.js';
 import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { requireNotFrozen } from '../middleware/cutover-freeze.js';
@@ -285,12 +287,64 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       }
     }
 
+    // Visa filter — same translation pattern. Visa adds IN_PROCESS /
+    // GRANTED / REJECTED which fall under the broad TICKETED bucket on
+    // the unified list (any "active and committed" application).
+    const FLIGHT_TO_VISA_STATUSES: Record<string, string[] | null> = {
+      INITIATED: ['DRAFT'],
+      HOLD: null,
+      PAYMENT_PENDING: null,
+      TICKETING_IN_PROGRESS: ['IN_PROCESS'],
+      CONFIRMED: ['CONFIRMED', 'IN_PROCESS', 'GRANTED'],
+      TICKETED: ['CONFIRMED', 'IN_PROCESS', 'GRANTED'],
+      PENDING_MANUAL: null,
+      CANCEL_REQUESTED: ['CANCEL_REQUESTED'],
+      CANCELLED: ['CANCELLED'],
+      REFUND_PENDING: null,
+      REFUNDED: null,
+      FAILED: ['BOOK_FAILED', 'REJECTED'],
+      EXPIRED: null,
+    };
+    const visaFilter: Record<string, unknown> = listFilter(req.auth!);
+    if (q.q) {
+      visaFilter.$or = [
+        { bookingCode: new RegExp(q.q, 'i') },
+        { productName: new RegExp(q.q, 'i') },
+        { countryName: new RegExp(q.q, 'i') },
+        { 'supplierRefs.applicationNo': new RegExp(q.q, 'i') },
+      ];
+    }
+    if (q.from || q.to) {
+      const range: Record<string, Date> = {};
+      if (q.from) range.$gte = q.from;
+      if (q.to) range.$lte = q.to;
+      visaFilter.expectedTravelDate = range;
+    }
+    let skipVisa = false;
+    if (q.status) {
+      const mapped = FLIGHT_TO_VISA_STATUSES[q.status];
+      if (mapped === null) {
+        skipVisa = true;
+      } else if (mapped) {
+        visaFilter.status = { $in: mapped };
+      }
+    }
+
     // Fetch a generous slice from each collection, then merge + paginate in
     // memory. This is fine for dev/agency scales (typically <1000 bookings
     // per agency); when we grow past that we'll need a proper cursor-based
     // merge or a unified Bookings collection.
     const fetchLimit = q.page * q.limit;
-    const [flights, hotels, holidays, flightTotal, hotelTotal, holidayTotal] = await Promise.all([
+    const [
+      flights,
+      hotels,
+      holidays,
+      visas,
+      flightTotal,
+      hotelTotal,
+      holidayTotal,
+      visaTotal,
+    ] = await Promise.all([
       Booking.find(filter).sort({ createdAt: -1 }).limit(fetchLimit),
       skipHotels
         ? Promise.resolve<HotelBookingDoc[]>([])
@@ -298,21 +352,26 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       skipHolidays
         ? Promise.resolve<HolidayBookingDoc[]>([])
         : HolidayBooking.find(holidayFilter).sort({ createdAt: -1 }).limit(fetchLimit),
+      skipVisa
+        ? Promise.resolve<VisaBookingDoc[]>([])
+        : VisaBooking.find(visaFilter).sort({ createdAt: -1 }).limit(fetchLimit),
       Booking.countDocuments(filter),
       skipHotels ? Promise.resolve(0) : HotelBooking.countDocuments(hotelFilter),
       skipHolidays ? Promise.resolve(0) : HolidayBooking.countDocuments(holidayFilter),
+      skipVisa ? Promise.resolve(0) : VisaBooking.countDocuments(visaFilter),
     ]);
 
     const merged = [
       ...flights.map((b) => ({ at: b.createdAt, item: serializeBooking(b) })),
       ...hotels.map((h) => ({ at: h.createdAt, item: serializeHotelBookingAsPublic(h) })),
       ...holidays.map((h) => ({ at: h.createdAt, item: serializeHolidayBookingAsPublic(h) })),
+      ...visas.map((v) => ({ at: v.createdAt, item: serializeVisaBookingAsPublic(v) })),
     ]
       .sort((a, b) => b.at.getTime() - a.at.getTime())
       .slice((q.page - 1) * q.limit, q.page * q.limit)
       .map((r) => r.item);
 
-    const total = flightTotal + hotelTotal + holidayTotal;
+    const total = flightTotal + hotelTotal + holidayTotal + visaTotal;
     return ok(res, merged, {
       page: q.page,
       limit: q.limit,
@@ -530,21 +589,121 @@ function serializeHolidayBookingAsPublic(h: HolidayBookingDoc): Record<string, u
   };
 }
 
+/**
+ * Map a VisaBooking row into the PublicBooking shape. Same pattern as
+ * holiday — synthesizes flight-shaped fields with visa-appropriate values
+ * and uses productType='VISA' as the discriminator.
+ */
+function serializeVisaBookingAsPublic(v: VisaBookingDoc): Record<string, unknown> {
+  const VISA_TO_FLIGHT_STATUS: Record<string, string> = {
+    DRAFT: 'INITIATED',
+    CONFIRMED: 'TICKETED',
+    IN_PROCESS: 'TICKETED',
+    GRANTED: 'TICKETED',
+    REJECTED: 'FAILED',
+    CANCEL_REQUESTED: 'CANCEL_REQUESTED',
+    CANCELLED: 'CANCELLED',
+    BOOK_FAILED: 'FAILED',
+  };
+  const travelDate = v.expectedTravelDate ?? v.createdAt;
+  return {
+    id: String(v._id),
+    bookingCode: v.bookingCode ?? `VIS-${String(v._id).slice(-6)}`,
+    status: VISA_TO_FLIGHT_STATUS[v.status] ?? 'CONFIRMED',
+    channel: 'ONLINE',
+    flowSubType: 'VISA',
+    productType: 'VISA',
+
+    pnr: v.supplierRefs?.applicationNo ?? null,
+    airlinePnr: null,
+    ticketNumbers: [],
+
+    agencyId: v.agencyId ? String(v.agencyId) : '',
+    agencyCode: '',
+    agencyName: v.productName,
+    distributorId: v.distributorId ? String(v.distributorId) : null,
+    bookedByUserId: String(v.bookedByUserId),
+
+    sector: `VISA · ${v.countryName ?? v.productName}`,
+    travelDate: travelDate.toISOString(),
+    returnDate: null,
+    tripType: 'ONEWAY',
+    travelClass: 'ECONOMY',
+
+    segments: [],
+    passengers: (v.applicants ?? []).map((a) => ({
+      type: a.paxType === 'CHD' ? 'CHILD' : a.paxType === 'INF' ? 'INFANT' : 'ADULT',
+      title: a.title ?? 'MR',
+      firstName: a.firstName ?? '',
+      lastName: a.lastName ?? '',
+      ticketNumber: null,
+      fareCategory: 'REGULAR',
+    })),
+    contact: {
+      email: v.applicants?.[0]?.email ?? '',
+      mobile: v.applicants?.[0]?.phone ?? '',
+      countryCode: '+91',
+    },
+    gst: v.gst?.gstin
+      ? {
+          number: v.gst.gstin,
+          companyName: v.gst.companyName ?? '',
+          address: v.gst.companyAddress ?? '',
+        }
+      : null,
+
+    pricing: {
+      baseFarePaise: v.pricing?.subtotalPaise ?? 0,
+      taxesPaise: v.pricing?.gstPaise ?? 0,
+      policyAdjustmentPaise: 0,
+      platformMarkupPaise: 0,
+      distributorMarkupPaise: 0,
+      agencyMarkupPaise: 0,
+      discountPaise: 0,
+      gstPaise: v.pricing?.gstPaise ?? 0,
+      grossAmountPaise: v.pricing?.totalPaise ?? 0,
+      netToSupplierPaise: v.pricing?.consulateFeePaise ?? 0,
+      agencyPayablePaise: v.pricing?.totalPaise ?? 0,
+      distributorEarningsPaise: 0,
+      platformEarningsPaise: 0,
+      currency: 'INR',
+    },
+    pricingTrace: [],
+
+    paymentMode: 'WALLET',
+    paymentStatus: ['CONFIRMED', 'IN_PROCESS', 'GRANTED'].includes(v.status)
+      ? 'PAID'
+      : 'PENDING',
+
+    initiatedAt: v.createdAt.toISOString(),
+    heldAt: null,
+    ticketedAt: v.confirmedAt?.toISOString() ?? null,
+    voidWindowEndsAt: null,
+    cancelledAt: v.cancelledAt?.toISOString() ?? null,
+    expiresAt: null,
+    refundedAt: null,
+    internalNotes: null,
+
+    createdAt: v.createdAt.toISOString(),
+    updatedAt: v.updatedAt.toISOString(),
+  };
+}
+
 bookingRouter.get('/:id', async (req, res, next) => {
   try {
     if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
     const filter = listFilter(req.auth!);
     filter._id = req.params.id;
-    // Look up in the flight Booking collection first, then fall back to
-    // HotelBooking. The web's /bookings/[id] page reads PublicBooking and
-    // branches on productType ('FLIGHT' default vs 'HOTEL') for sector,
-    // segments, pricing layout — so we return the same shape either way.
+    // Look up across all product collections in priority order. Detail
+    // page reads PublicBooking and branches on productType.
     const b = await Booking.findOne(filter);
     if (b) return ok(res, serializeBooking(b));
     const h = await HotelBooking.findOne(filter);
     if (h) return ok(res, serializeHotelBookingAsPublic(h));
     const hol = await HolidayBooking.findOne(filter);
     if (hol) return ok(res, serializeHolidayBookingAsPublic(hol));
+    const v = await VisaBooking.findOne(filter);
+    if (v) return ok(res, serializeVisaBookingAsPublic(v));
     throw new AppError('NOT_FOUND');
   } catch (err) {
     next(err);
@@ -570,6 +729,63 @@ bookingRouter.post(
       const hotelExists = !flightExists && (await HotelBooking.exists(filterScope));
       const holidayExists =
         !flightExists && !hotelExists && (await HolidayBooking.exists(filterScope));
+      const visaExists =
+        !flightExists &&
+        !hotelExists &&
+        !holidayExists &&
+        (await VisaBooking.exists(filterScope));
+
+      if (visaExists) {
+        if (!req.auth!.agencyId) {
+          throw new AppError('VALIDATION_ERROR', { reason: 'agency context required' });
+        }
+        const filter = listFilter(req.auth!);
+        filter._id = req.params.id;
+        const v = await VisaBooking.findOne(filter);
+        if (!v) throw new AppError('NOT_FOUND');
+        if (['CANCELLED', 'CANCEL_REQUESTED', 'GRANTED', 'REJECTED'].includes(v.status)) {
+          throw new AppError('VALIDATION_ERROR', {
+            reason:
+              v.status === 'CANCELLED'
+                ? 'application already cancelled'
+                : v.status === 'GRANTED'
+                  ? 'visa already granted — cannot cancel'
+                  : v.status === 'REJECTED'
+                    ? 'application already rejected'
+                    : 'cancel already in progress',
+          });
+        }
+        // Full refund — real wiring would call the embassy/portal cancel
+        // and walk cancellationSchedule for partials.
+        const refundPaise = v.pricing?.totalPaise ?? 0;
+        if (refundPaise > 0) {
+          const { walletService } = await import('../services/payment/wallet.service.js');
+          const wallet = await walletService.findOrCreateForAgency(
+            new Types.ObjectId(req.auth!.tenantId),
+            new Types.ObjectId(req.auth!.agencyId),
+          );
+          await walletService.credit({
+            walletId: wallet._id,
+            amount: refundPaise,
+            type: 'REFUND_CREDIT',
+            description: `Visa cancel ${v.bookingCode ?? String(v._id)} — ${v.productName}`,
+            performedBy: new Types.ObjectId(req.auth!.userId),
+            bookingId: v._id,
+            idempotencyKey: `visa-cancel-${v._id.toHexString()}`,
+            metadata: { reason: body.reason ?? 'agent-cancel' },
+          });
+        }
+        v.status = 'CANCELLED';
+        v.statusHistory.push({
+          status: 'CANCELLED',
+          at: new Date(),
+          by: new Types.ObjectId(req.auth!.userId),
+          note: body.reason?.slice(0, 200) ?? null,
+        });
+        v.cancelledAt = new Date();
+        await v.save();
+        return ok(res, serializeVisaBookingAsPublic(v));
+      }
 
       if (holidayExists) {
         if (!req.auth!.agencyId) {
@@ -883,6 +1099,16 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
           `attachment; filename="invoice-${hol.bookingCode ?? String(hol._id)}.pdf"`,
         );
         generateHolidayInvoicePdf(hol).pipe(res);
+        return;
+      }
+      const visa = await VisaBooking.findOne(filter);
+      if (visa) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="invoice-${visa.bookingCode ?? String(visa._id)}.pdf"`,
+        );
+        generateVisaInvoicePdf(visa).pipe(res);
         return;
       }
       throw new AppError('NOT_FOUND');
