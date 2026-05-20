@@ -37,6 +37,7 @@ import { registrationsRouter } from './registrations.routes.js';
 import { adminRegistrationsRouter } from './admin-registrations.routes.js';
 import { savedPassengerRouter } from './saved-passenger.routes.js';
 import { internalRouter } from './internal.routes.js';
+import { adminAgencyRouter } from './admin-agency.routes.js';
 
 export const apiRouter: RouterT = Router();
 
@@ -57,6 +58,9 @@ apiRouter.use('/wallet', walletRouter);
 // /internal/* — booking engine ↔ wallet service-to-service endpoints.
 // Auth via INTERNAL_API_KEY shared secret (see middleware/internal-auth.ts).
 apiRouter.use('/internal', internalRouter);
+// /admin/* — Phase-5 admin endpoints for the wallet/credit/DI/transfer
+// surfaces from Phases 1-4. Requires SUPER_ADMIN role (enforced per-route).
+apiRouter.use('/admin', adminAgencyRouter);
 apiRouter.use('/search', searchRouter);
 apiRouter.use('/airports', airportRouter);
 
