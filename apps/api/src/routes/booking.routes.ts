@@ -17,6 +17,7 @@ import { Booking } from '../models/Booking.js';
 import { HotelBooking, type HotelBookingDoc } from '../models/HotelBooking.js';
 import { HolidayBooking, type HolidayBookingDoc } from '../models/HolidayBooking.js';
 import { VisaBooking, type VisaBookingDoc } from '../models/VisaBooking.js';
+import { BusBooking, type BusBookingDoc } from '../models/BusBooking.js';
 import {
   cancelBooking,
   confirmBooking,
@@ -330,6 +331,52 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       }
     }
 
+    // Bus filter — its own status enum (BLOCKED / BOOKED / FAILED /
+    // CANCELLED / PARTIALLY_CANCELLED / OPERATOR_CANCELLED).
+    const FLIGHT_TO_BUS_STATUSES: Record<string, string[] | null> = {
+      INITIATED: ['BLOCKED'],
+      HOLD: ['BLOCKED'],
+      PAYMENT_PENDING: null,
+      TICKETING_IN_PROGRESS: null,
+      CONFIRMED: ['BOOKED'],
+      TICKETED: ['BOOKED'],
+      PENDING_MANUAL: null,
+      CANCEL_REQUESTED: null,
+      CANCELLED: ['CANCELLED', 'PARTIALLY_CANCELLED', 'OPERATOR_CANCELLED'],
+      REFUND_PENDING: null,
+      REFUNDED: null,
+      FAILED: ['FAILED'],
+      EXPIRED: null,
+    };
+    const busFilter: Record<string, unknown> = listFilter(req.auth!);
+    if (q.q) {
+      busFilter.$or = [
+        { bookingRef: new RegExp(q.q, 'i') },
+        { tin: new RegExp(q.q, 'i') },
+        { pnr: new RegExp(q.q, 'i') },
+        { 'trip.sourceCityName': new RegExp(q.q, 'i') },
+        { 'trip.destinationCityName': new RegExp(q.q, 'i') },
+      ];
+    }
+    if (q.from || q.to) {
+      // Bus stores doj as "yyyy-MM-dd" string, so we can't do a Date range
+      // here directly. We compare as strings — works because ISO date sort
+      // and lexical sort agree.
+      const range: Record<string, string> = {};
+      if (q.from) range.$gte = q.from.toISOString().slice(0, 10);
+      if (q.to) range.$lte = q.to.toISOString().slice(0, 10);
+      busFilter['trip.doj'] = range;
+    }
+    let skipBus = false;
+    if (q.status) {
+      const mapped = FLIGHT_TO_BUS_STATUSES[q.status];
+      if (mapped === null) {
+        skipBus = true;
+      } else if (mapped) {
+        busFilter.status = { $in: mapped };
+      }
+    }
+
     // Fetch a generous slice from each collection, then merge + paginate in
     // memory. This is fine for dev/agency scales (typically <1000 bookings
     // per agency); when we grow past that we'll need a proper cursor-based
@@ -340,10 +387,12 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       hotels,
       holidays,
       visas,
+      buses,
       flightTotal,
       hotelTotal,
       holidayTotal,
       visaTotal,
+      busTotal,
     ] = await Promise.all([
       Booking.find(filter).sort({ createdAt: -1 }).limit(fetchLimit),
       skipHotels
@@ -355,10 +404,14 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       skipVisa
         ? Promise.resolve<VisaBookingDoc[]>([])
         : VisaBooking.find(visaFilter).sort({ createdAt: -1 }).limit(fetchLimit),
+      skipBus
+        ? Promise.resolve<BusBookingDoc[]>([])
+        : BusBooking.find(busFilter).sort({ createdAt: -1 }).limit(fetchLimit),
       Booking.countDocuments(filter),
       skipHotels ? Promise.resolve(0) : HotelBooking.countDocuments(hotelFilter),
       skipHolidays ? Promise.resolve(0) : HolidayBooking.countDocuments(holidayFilter),
       skipVisa ? Promise.resolve(0) : VisaBooking.countDocuments(visaFilter),
+      skipBus ? Promise.resolve(0) : BusBooking.countDocuments(busFilter),
     ]);
 
     const merged = [
@@ -366,12 +419,13 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       ...hotels.map((h) => ({ at: h.createdAt, item: serializeHotelBookingAsPublic(h) })),
       ...holidays.map((h) => ({ at: h.createdAt, item: serializeHolidayBookingAsPublic(h) })),
       ...visas.map((v) => ({ at: v.createdAt, item: serializeVisaBookingAsPublic(v) })),
+      ...buses.map((b) => ({ at: b.createdAt, item: serializeBusBookingAsPublic(b) })),
     ]
       .sort((a, b) => b.at.getTime() - a.at.getTime())
       .slice((q.page - 1) * q.limit, q.page * q.limit)
       .map((r) => r.item);
 
-    const total = flightTotal + hotelTotal + holidayTotal + visaTotal;
+    const total = flightTotal + hotelTotal + holidayTotal + visaTotal + busTotal;
     return ok(res, merged, {
       page: q.page,
       limit: q.limit,
@@ -689,6 +743,100 @@ function serializeVisaBookingAsPublic(v: VisaBookingDoc): Record<string, unknown
   };
 }
 
+/**
+ * Map a BusBooking row into the PublicBooking shape. Bus has its own
+ * dedicated /bus/* routes for the full booking surface (seat layout,
+ * boarding-point picker, etc); this adapter is just the unified-list
+ * read path. productType='BUS', sector = "source → destination",
+ * travelDate = trip.doj (start of day IST), pax = passengers count.
+ */
+function serializeBusBookingAsPublic(b: BusBookingDoc): Record<string, unknown> {
+  const BUS_TO_FLIGHT_STATUS: Record<string, string> = {
+    BLOCKED: 'HOLD',
+    BOOKED: 'TICKETED',
+    FAILED: 'FAILED',
+    CANCELLED: 'CANCELLED',
+    PARTIALLY_CANCELLED: 'CANCELLED',
+    OPERATOR_CANCELLED: 'CANCELLED',
+  };
+  // Trip.doj is "yyyy-MM-dd" IST. Parse as UTC midnight — the table
+  // just shows the date string, no time zone games to worry about.
+  const dojDate = new Date(`${b.trip?.doj}T00:00:00.000Z`);
+  return {
+    id: String(b._id),
+    bookingCode: b.bookingRef,
+    status: BUS_TO_FLIGHT_STATUS[b.status] ?? 'CONFIRMED',
+    channel: 'ONLINE',
+    flowSubType: 'BUS',
+    productType: 'BUS',
+
+    pnr: b.tin ?? b.pnr ?? null,
+    airlinePnr: b.pnr ?? null,
+    ticketNumbers: [],
+
+    agencyId: b.agencyId ? String(b.agencyId) : '',
+    agencyCode: '',
+    agencyName: b.trip?.operatorName ?? '',
+    distributorId: null,
+    bookedByUserId: String(b.bookedByUserId),
+
+    sector: `${b.trip?.sourceCityName ?? '?'} → ${b.trip?.destinationCityName ?? '?'}`,
+    travelDate: dojDate.toISOString(),
+    returnDate: null,
+    tripType: 'ONEWAY',
+    travelClass: 'ECONOMY',
+
+    segments: [],
+    passengers: (b.passengers ?? []).map((p) => ({
+      type: p.age >= 12 ? 'ADULT' : p.age >= 2 ? 'CHILD' : 'INFANT',
+      title: p.title ?? 'Mr',
+      firstName: p.name?.split(/\s+/)[0] ?? '',
+      lastName: p.name?.split(/\s+/).slice(1).join(' ') ?? '',
+      ticketNumber: p.seatName ?? null,
+      fareCategory: 'REGULAR',
+    })),
+    contact: {
+      email: '',
+      mobile: '',
+      countryCode: '+91',
+    },
+    gst: null,
+
+    pricing: {
+      baseFarePaise: b.fareBreakup?.baseFarePaise ?? 0,
+      taxesPaise: b.fareBreakup?.serviceTaxPaise ?? 0,
+      policyAdjustmentPaise: 0,
+      platformMarkupPaise: 0,
+      distributorMarkupPaise: 0,
+      agencyMarkupPaise: 0,
+      discountPaise: 0,
+      gstPaise: b.fareBreakup?.serviceTaxPaise ?? 0,
+      grossAmountPaise: b.fareBreakup?.totalPaise ?? 0,
+      netToSupplierPaise: b.fareBreakup?.baseFarePaise ?? 0,
+      agencyPayablePaise: b.fareBreakup?.totalPaise ?? 0,
+      distributorEarningsPaise: 0,
+      platformEarningsPaise: 0,
+      currency: 'INR',
+    },
+    pricingTrace: [],
+
+    paymentMode: 'WALLET',
+    paymentStatus: b.status === 'BOOKED' ? 'PAID' : b.status === 'CANCELLED' ? 'REFUNDED' : 'PENDING',
+
+    initiatedAt: b.createdAt.toISOString(),
+    heldAt: b.blockedAt?.toISOString() ?? null,
+    ticketedAt: b.bookedAt?.toISOString() ?? null,
+    voidWindowEndsAt: null,
+    cancelledAt: b.cancelledAt?.toISOString() ?? b.operatorCancelledAt?.toISOString() ?? null,
+    expiresAt: null,
+    refundedAt: null,
+    internalNotes: null,
+
+    createdAt: b.createdAt.toISOString(),
+    updatedAt: b.updatedAt.toISOString(),
+  };
+}
+
 bookingRouter.get('/:id', async (req, res, next) => {
   try {
     if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
@@ -704,6 +852,8 @@ bookingRouter.get('/:id', async (req, res, next) => {
     if (hol) return ok(res, serializeHolidayBookingAsPublic(hol));
     const v = await VisaBooking.findOne(filter);
     if (v) return ok(res, serializeVisaBookingAsPublic(v));
+    const bus = await BusBooking.findOne(filter);
+    if (bus) return ok(res, serializeBusBookingAsPublic(bus));
     throw new AppError('NOT_FOUND');
   } catch (err) {
     next(err);
@@ -734,6 +884,36 @@ bookingRouter.post(
         !hotelExists &&
         !holidayExists &&
         (await VisaBooking.exists(filterScope));
+      const busExists =
+        !flightExists &&
+        !hotelExists &&
+        !holidayExists &&
+        !visaExists &&
+        (await BusBooking.exists(filterScope));
+
+      if (busExists) {
+        if (!req.auth!.agencyId) {
+          throw new AppError('VALIDATION_ERROR', { reason: 'agency context required' });
+        }
+        // Delegate to the existing bus cancel service — it handles
+        // SeatSeller round-trip, partial-cancel math, and wallet
+        // refund with the right txnId linkage on BusBooking.
+        const { cancelBooking: busCancelBooking } = await import(
+          '../services/bus/cancellation.service.js'
+        );
+        const result = await busCancelBooking(
+          {
+            tenantId: req.auth!.tenantId,
+            agencyId: req.auth!.agencyId,
+            userId: req.auth!.userId,
+            role: req.auth!.role,
+            ipAddress: req.ip ?? null,
+          },
+          req.params.id,
+          { note: body.reason ?? undefined },
+        );
+        return ok(res, serializeBusBookingAsPublic(result.booking));
+      }
 
       if (visaExists) {
         if (!req.auth!.agencyId) {
@@ -1109,6 +1289,27 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
           `attachment; filename="invoice-${visa.bookingCode ?? String(visa._id)}.pdf"`,
         );
         generateVisaInvoicePdf(visa).pipe(res);
+        return;
+      }
+      const bus = await BusBooking.findOne(filter);
+      if (bus) {
+        // Bus has a structured BusInvoice model and renderer with proper
+        // GST splits — prefer that. generateInvoiceForBooking is
+        // idempotent (returns the cached row if one exists). Wraps any
+        // upstream validation error (booking still BLOCKED, no GST
+        // profile, etc) in the same shape so formatApiError surfaces it.
+        const { generateInvoiceForBooking } = await import(
+          '../services/bus/invoice.service.js'
+        );
+        const { renderBusInvoicePdf } = await import('../services/bus/invoice-pdf.js');
+        const { invoice } = await generateInvoiceForBooking(bus._id);
+        const pdf = await renderBusInvoicePdf(invoice);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${invoice.invoiceNumber}.pdf"`,
+        );
+        res.send(pdf);
         return;
       }
       throw new AppError('NOT_FOUND');

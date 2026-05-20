@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft,
+  Bus as BusIcon,
   Clock,
   Hotel as HotelIcon,
   Plane,
@@ -120,6 +121,7 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
   const isHoliday =
     productType === 'HOLIDAY' || (b.flowSubType as unknown as string) === 'HOLIDAY';
   const isVisa = productType === 'VISA' || (b.flowSubType as unknown as string) === 'VISA';
+  const isBus = productType === 'BUS' || (b.flowSubType as unknown as string) === 'BUS';
   const checkOutStr = b.returnDate
     ? new Date(b.returnDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })
     : null;
@@ -128,23 +130,27 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
     <div className="space-y-6">
       <PageHeader
         eyebrow={
-          isVisa
-            ? 'VISA'
-            : isHoliday
-              ? 'HOLIDAY'
-              : isHotel
-                ? 'HOTEL'
-                : b.flowSubType
+          isBus
+            ? 'BUS'
+            : isVisa
+              ? 'VISA'
+              : isHoliday
+                ? 'HOLIDAY'
+                : isHotel
+                  ? 'HOTEL'
+                  : b.flowSubType
         }
         title={b.bookingCode}
         description={
-          isVisa
-            ? `Application ${b.pnr ?? '—'} · ${b.sector.replace(/^VISA · /, '')} · Expected travel ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
-            : isHoliday
-              ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOLIDAY · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
-              : isHotel
-                ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOTEL · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
-                : `PNR ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+          isBus
+            ? `TIN ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+            : isVisa
+              ? `Application ${b.pnr ?? '—'} · ${b.sector.replace(/^VISA · /, '')} · Expected travel ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+              : isHoliday
+                ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOLIDAY · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+                : isHotel
+                  ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOTEL · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+                  : `PNR ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
         }
         actions={
           <div className="flex items-center gap-2">
@@ -153,7 +159,7 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
                 <ArrowLeft className="h-4 w-4" /> All bookings
               </Link>
             </Button>
-            {b.status === 'TICKETED' && !isHotel && !isHoliday && !isVisa ? (
+            {b.status === 'TICKETED' && !isHotel && !isHoliday && !isVisa && !isBus ? (
               <Button variant="secondary" onClick={() => downloadPdf('ticket')}>
                 <Plane className="h-4 w-4" /> e-Ticket
               </Button>
@@ -208,7 +214,48 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
         </Card>
       </div>
 
-      {isVisa ? (
+      {isBus ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Bus journey</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <BusIcon className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-ink-1">{b.sector}</p>
+                    <p className="text-xs text-ink-3">
+                      Operator: {b.agencyName || '—'} · TIN {b.pnr ?? '—'}
+                    </p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  SEATSELLER
+                </Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Travel date</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Seats</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {b.passengers
+                      .map((p) => p.ticketNumber)
+                      .filter(Boolean)
+                      .join(', ') || '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isVisa ? (
         <Card>
           <CardContent className="p-6">
             <p className="text-xs uppercase tracking-wider text-ink-3">Visa application</p>
