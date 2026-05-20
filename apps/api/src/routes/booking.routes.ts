@@ -18,6 +18,8 @@ import { HotelBooking, type HotelBookingDoc } from '../models/HotelBooking.js';
 import { HolidayBooking, type HolidayBookingDoc } from '../models/HolidayBooking.js';
 import { VisaBooking, type VisaBookingDoc } from '../models/VisaBooking.js';
 import { BusBooking, type BusBookingDoc } from '../models/BusBooking.js';
+import { InsurancePolicy, type InsurancePolicyDoc } from '../models/InsurancePolicy.js';
+import { User } from '../models/User.js';
 import {
   cancelBooking,
   confirmBooking,
@@ -377,6 +379,63 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       }
     }
 
+    // Insurance filter — tiny status enum (ISSUED / ENDORSED /
+    // CANCELLED). Insurance is tenant-scoped not agency-scoped (the
+    // InsurancePolicy model has no agencyId), so for AGENCY / SUB_AGENT
+    // we constrain to policies created by anyone in this agency via a
+    // User join. ADMIN / SUPER_ADMIN see every policy in the tenant.
+    const FLIGHT_TO_INSURANCE_STATUSES: Record<string, string[] | null> = {
+      INITIATED: null, // insurance is issued in one shot — no draft state
+      HOLD: null,
+      PAYMENT_PENDING: null,
+      TICKETING_IN_PROGRESS: null,
+      CONFIRMED: ['ISSUED', 'ENDORSED'],
+      TICKETED: ['ISSUED', 'ENDORSED'],
+      PENDING_MANUAL: null,
+      CANCEL_REQUESTED: null,
+      CANCELLED: ['CANCELLED'],
+      REFUND_PENDING: null,
+      REFUNDED: null,
+      FAILED: null, // failed issuances don't persist a row
+      EXPIRED: null,
+    };
+    const insuranceFilter: Record<string, unknown> = {
+      tenantId: new Types.ObjectId(req.auth!.tenantId),
+    };
+    if (
+      (req.auth!.role === 'AGENCY' || req.auth!.role === 'SUB_AGENT') &&
+      req.auth!.agencyId
+    ) {
+      const agencyUsers = await User.find(
+        {
+          tenantId: new Types.ObjectId(req.auth!.tenantId),
+          agencyId: new Types.ObjectId(req.auth!.agencyId),
+        },
+        { _id: 1 },
+      ).lean();
+      insuranceFilter.createdBy = { $in: agencyUsers.map((u) => u._id) };
+    }
+    if (q.q) {
+      insuranceFilter.$or = [
+        { policyNumber: new RegExp(q.q, 'i') },
+        { orderId: new RegExp(q.q, 'i') },
+        { insurerName: new RegExp(q.q, 'i') },
+        { planName: new RegExp(q.q, 'i') },
+      ];
+    }
+    // No travelDate on InsurancePolicy — startDate/endDate live in
+    // quotationSnapshot. Skip date-range filtering for insurance for
+    // now; the typical query is "show me my policies" without dates.
+    let skipInsurance = false;
+    if (q.status) {
+      const mapped = FLIGHT_TO_INSURANCE_STATUSES[q.status];
+      if (mapped === null) {
+        skipInsurance = true;
+      } else if (mapped) {
+        insuranceFilter.status = { $in: mapped };
+      }
+    }
+
     // Fetch a generous slice from each collection, then merge + paginate in
     // memory. This is fine for dev/agency scales (typically <1000 bookings
     // per agency); when we grow past that we'll need a proper cursor-based
@@ -388,11 +447,13 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       holidays,
       visas,
       buses,
+      insurances,
       flightTotal,
       hotelTotal,
       holidayTotal,
       visaTotal,
       busTotal,
+      insuranceTotal,
     ] = await Promise.all([
       Booking.find(filter).sort({ createdAt: -1 }).limit(fetchLimit),
       skipHotels
@@ -407,11 +468,15 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       skipBus
         ? Promise.resolve<BusBookingDoc[]>([])
         : BusBooking.find(busFilter).sort({ createdAt: -1 }).limit(fetchLimit),
+      skipInsurance
+        ? Promise.resolve<InsurancePolicyDoc[]>([])
+        : InsurancePolicy.find(insuranceFilter).sort({ createdAt: -1 }).limit(fetchLimit),
       Booking.countDocuments(filter),
       skipHotels ? Promise.resolve(0) : HotelBooking.countDocuments(hotelFilter),
       skipHolidays ? Promise.resolve(0) : HolidayBooking.countDocuments(holidayFilter),
       skipVisa ? Promise.resolve(0) : VisaBooking.countDocuments(visaFilter),
       skipBus ? Promise.resolve(0) : BusBooking.countDocuments(busFilter),
+      skipInsurance ? Promise.resolve(0) : InsurancePolicy.countDocuments(insuranceFilter),
     ]);
 
     const merged = [
@@ -420,12 +485,17 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       ...holidays.map((h) => ({ at: h.createdAt, item: serializeHolidayBookingAsPublic(h) })),
       ...visas.map((v) => ({ at: v.createdAt, item: serializeVisaBookingAsPublic(v) })),
       ...buses.map((b) => ({ at: b.createdAt, item: serializeBusBookingAsPublic(b) })),
+      ...insurances.map((p) => ({
+        at: p.createdAt,
+        item: serializeInsurancePolicyAsPublic(p),
+      })),
     ]
       .sort((a, b) => b.at.getTime() - a.at.getTime())
       .slice((q.page - 1) * q.limit, q.page * q.limit)
       .map((r) => r.item);
 
-    const total = flightTotal + hotelTotal + holidayTotal + visaTotal + busTotal;
+    const total =
+      flightTotal + hotelTotal + holidayTotal + visaTotal + busTotal + insuranceTotal;
     return ok(res, merged, {
       page: q.page,
       limit: q.limit,
@@ -837,6 +907,164 @@ function serializeBusBookingAsPublic(b: BusBookingDoc): Record<string, unknown> 
   };
 }
 
+/**
+ * Map an InsurancePolicy row into the PublicBooking shape. Insurance has
+ * its own dedicated /insurance/* routes for the full purchase + lifecycle
+ * surface (quote / validate / issue / endorse / cancel); this adapter
+ * exists so policies show up on the unified /bookings list and detail
+ * page alongside flight / hotel / holiday / visa / bus rows.
+ *
+ * Quirks vs other products:
+ *  - No agencyId on the policy — agencyId is left empty and the list
+ *    filter scopes by createdBy via a User join upstream.
+ *  - travelDate = quotation.startDate (yyyy-MM-dd), returnDate = endDate.
+ *  - "PNR slot" surfaces the policy number; UI relabels accordingly.
+ *  - No passenger fare breakdown — totalPremiumPaise lands on every
+ *    pricing field that needs a number, everything else is zeroed.
+ */
+function serializeInsurancePolicyAsPublic(
+  p: InsurancePolicyDoc,
+): Record<string, unknown> {
+  const INSURANCE_TO_FLIGHT_STATUS: Record<string, string> = {
+    ISSUED: 'TICKETED',
+    ENDORSED: 'TICKETED',
+    CANCELLED: 'CANCELLED',
+  };
+  const quotation = (p.quotationSnapshot ?? {}) as {
+    startDate?: string;
+    endDate?: string;
+    destination?: string;
+  };
+  const startISO = quotation.startDate
+    ? new Date(`${quotation.startDate}T00:00:00.000Z`).toISOString()
+    : p.createdAt.toISOString();
+  const endISO = quotation.endDate
+    ? new Date(`${quotation.endDate}T00:00:00.000Z`).toISOString()
+    : null;
+  const travelers = Array.isArray(p.travelerSnapshot)
+    ? (p.travelerSnapshot as Array<Record<string, unknown>>)
+    : p.travelerSnapshot
+      ? [p.travelerSnapshot as Record<string, unknown>]
+      : [];
+  const titleMap: Record<string, string> = {
+    MR: 'Mr',
+    MRS: 'Mrs',
+    MS: 'Ms',
+    MSTR: 'Mstr',
+    MISS: 'Miss',
+  };
+  return {
+    id: String(p._id),
+    bookingCode: p.policyNumber,
+    status: INSURANCE_TO_FLIGHT_STATUS[p.status] ?? 'CONFIRMED',
+    channel: 'ONLINE',
+    flowSubType: 'INSURANCE',
+    productType: 'INSURANCE',
+
+    pnr: p.policyNumber,
+    airlinePnr: null,
+    ticketNumbers: [p.policyNumber],
+
+    agencyId: '',
+    agencyCode: '',
+    agencyName: p.insurerName ?? p.insurerId ?? 'Insurance',
+    distributorId: null,
+    bookedByUserId: String(p.createdBy ?? ''),
+
+    sector: quotation.destination
+      ? `Coverage · ${quotation.destination}`
+      : `Coverage · ${p.planName ?? p.planId}`,
+    travelDate: startISO,
+    returnDate: endISO,
+    tripType: 'ONEWAY',
+    travelClass: 'ECONOMY',
+
+    segments: [],
+    passengers: travelers.map((t) => {
+      const firstName = typeof t.firstName === 'string' ? t.firstName : '';
+      const lastName = typeof t.lastName === 'string' ? t.lastName : '';
+      const titleRaw = typeof t.title === 'string' ? t.title : 'MR';
+      const paxType = typeof t.type === 'string' ? t.type : 'ADULT';
+      return {
+        type: paxType === 'CHILD' || paxType === 'INFANT' ? paxType : 'ADULT',
+        title: titleMap[titleRaw] ?? 'Mr',
+        firstName,
+        lastName,
+        ticketNumber: p.policyNumber,
+        fareCategory: 'REGULAR',
+      };
+    }),
+    contact: {
+      email: typeof travelers[0]?.email === 'string' ? (travelers[0].email as string) : '',
+      mobile:
+        typeof travelers[0]?.mobileNo === 'string'
+          ? (travelers[0].mobileNo as string)
+          : '',
+      countryCode: '+91',
+    },
+    gst: null,
+
+    pricing: {
+      baseFarePaise: p.totalPremiumPaise,
+      taxesPaise: 0,
+      policyAdjustmentPaise: 0,
+      platformMarkupPaise: 0,
+      distributorMarkupPaise: 0,
+      agencyMarkupPaise: 0,
+      discountPaise: 0,
+      gstPaise: 0,
+      grossAmountPaise: p.totalPremiumPaise,
+      netToSupplierPaise: p.totalPremiumPaise,
+      agencyPayablePaise: p.totalPremiumPaise,
+      distributorEarningsPaise: 0,
+      platformEarningsPaise: 0,
+      currency: p.currency ?? 'INR',
+    },
+    pricingTrace: [],
+
+    paymentMode: 'WALLET',
+    paymentStatus: p.status === 'CANCELLED' ? 'REFUNDED' : 'PAID',
+
+    initiatedAt: p.createdAt.toISOString(),
+    heldAt: null,
+    ticketedAt: p.createdAt.toISOString(),
+    voidWindowEndsAt: null,
+    cancelledAt: p.cancelledAt?.toISOString() ?? null,
+    expiresAt: endISO,
+    refundedAt:
+      p.status === 'CANCELLED' && p.cancelledAt ? p.cancelledAt.toISOString() : null,
+    internalNotes: null,
+
+    createdAt: p.createdAt.toISOString(),
+    updatedAt: p.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Insurance has no agencyId, so the standard listFilter (which adds
+ * agencyId for AGENCY/SUB_AGENT) doesn't apply. Build the tenant-scoped
+ * filter inline; for AGENCY/SUB_AGENT we then narrow to policies whose
+ * createdBy is a user in their agency.
+ */
+async function findInsurancePolicyForActor(
+  auth: AuthContext,
+  id: string,
+): Promise<InsurancePolicyDoc | null> {
+  const policy = await InsurancePolicy.findOne({
+    _id: id,
+    tenantId: new Types.ObjectId(auth.tenantId),
+  });
+  if (!policy) return null;
+  if ((auth.role === 'AGENCY' || auth.role === 'SUB_AGENT') && auth.agencyId) {
+    const owner = await User.findOne(
+      { _id: policy.createdBy, agencyId: new Types.ObjectId(auth.agencyId) },
+      { _id: 1 },
+    ).lean();
+    if (!owner) return null;
+  }
+  return policy;
+}
+
 bookingRouter.get('/:id', async (req, res, next) => {
   try {
     if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
@@ -854,6 +1082,8 @@ bookingRouter.get('/:id', async (req, res, next) => {
     if (v) return ok(res, serializeVisaBookingAsPublic(v));
     const bus = await BusBooking.findOne(filter);
     if (bus) return ok(res, serializeBusBookingAsPublic(bus));
+    const insurance = await findInsurancePolicyForActor(req.auth!, req.params.id);
+    if (insurance) return ok(res, serializeInsurancePolicyAsPublic(insurance));
     throw new AppError('NOT_FOUND');
   } catch (err) {
     next(err);
@@ -890,6 +1120,58 @@ bookingRouter.post(
         !holidayExists &&
         !visaExists &&
         (await BusBooking.exists(filterScope));
+      // Insurance is tenant-scoped, no agencyId on the doc — check
+      // existence on tenant + _id only, then run the createdBy-in-
+      // agency narrowing once we have the row.
+      const insurancePolicyExists =
+        !flightExists &&
+        !hotelExists &&
+        !holidayExists &&
+        !visaExists &&
+        !busExists &&
+        (await InsurancePolicy.exists({
+          _id: req.params.id,
+          tenantId: new Types.ObjectId(req.auth!.tenantId),
+        }));
+
+      if (insurancePolicyExists) {
+        const policy = await findInsurancePolicyForActor(req.auth!, req.params.id);
+        if (!policy) throw new AppError('NOT_FOUND');
+        if (policy.status === 'CANCELLED') {
+          throw new AppError('VALIDATION_ERROR', {
+            reason: 'policy already cancelled',
+          });
+        }
+        // ASEGO cancel requires a structured reasonId UUID — the unified
+        // cancel route only carries a free-text reason. Pick the first
+        // ASEGO cancellation reason from the master list and forward the
+        // user's free-text reason as remarks. Callers who need to pick
+        // a specific reasonId can still hit POST /insurance/cancel
+        // directly with the structured payload.
+        const { listReasons } = await import('../services/insurance/master.service.js');
+        const reasons = await listReasons('cancellation').catch(() => []);
+        const reasonId = reasons[0]?.id;
+        if (!reasonId) {
+          throw new AppError('SUPPLIER_UNAVAILABLE', {
+            reason:
+              'ASEGO cancellation reasons unavailable — try POST /insurance/cancel directly',
+          });
+        }
+        const { cancelPolicy } = await import('../services/insurance/cancel.service.js');
+        await cancelPolicy(
+          { tenantId: req.auth!.tenantId, userId: req.auth!.userId },
+          {
+            policyNumber: policy.policyNumber,
+            reasonId,
+            remarks: body.reason?.slice(0, 240),
+          },
+        );
+        // Re-fetch — cancelPolicy persisted status=CANCELLED + cancelledAt
+        // on the doc, but we want the serializer to see the fresh values.
+        const fresh = await InsurancePolicy.findById(policy._id);
+        if (!fresh) throw new AppError('NOT_FOUND');
+        return ok(res, serializeInsurancePolicyAsPublic(fresh));
+      }
 
       if (busExists) {
         if (!req.auth!.agencyId) {
@@ -1310,6 +1592,19 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
           `attachment; filename="${invoice.invoiceNumber}.pdf"`,
         );
         res.send(pdf);
+        return;
+      }
+      // Insurance "invoice" is the policy PDF — i.e. the certificate of
+      // coverage that ASEGO returns. We proxy /insurance/policy/:n/pdf
+      // via streamPolicyPdf so the ASEGO file path never leaks to the
+      // browser. The same Content-Disposition headers get set inside
+      // streamPolicyPdf so we just delegate.
+      const policy = await findInsurancePolicyForActor(req.auth!, req.params.id);
+      if (policy) {
+        const { streamPolicyPdf } = await import(
+          '../services/insurance/download.service.js'
+        );
+        await streamPolicyPdf({ tenantId: req.auth!.tenantId }, policy.policyNumber, res);
         return;
       }
       throw new AppError('NOT_FOUND');

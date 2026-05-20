@@ -14,6 +14,7 @@ import {
   PlaneTakeoff,
   Rows3,
   Search,
+  ShieldCheck as InsuranceIcon,
   StickyNote as VisaIcon,
   Table as TableIcon,
 } from 'lucide-react';
@@ -82,19 +83,31 @@ export default function BookingsPage() {
             productType === 'HOLIDAY' || b.flowSubType === ('HOLIDAY' as never);
           const isVisa = productType === 'VISA' || b.flowSubType === ('VISA' as never);
           const isBus = productType === 'BUS' || b.flowSubType === ('BUS' as never);
-          const Icon = isBus
-            ? BusIcon
-            : isVisa
-              ? VisaIcon
-              : isHotel || isHoliday
-                ? HotelIcon
-                : Plane;
+          const isInsurance =
+            productType === 'INSURANCE' || b.flowSubType === ('INSURANCE' as never);
+          const Icon = isInsurance
+            ? InsuranceIcon
+            : isBus
+              ? BusIcon
+              : isVisa
+                ? VisaIcon
+                : isHotel || isHoliday
+                  ? HotelIcon
+                  : Plane;
           // All product types now open /bookings/[id] — the detail page
           // discriminates on productType and renders flight / hotel /
-          // holiday / visa layouts accordingly.
+          // holiday / visa / bus / insurance layouts accordingly.
           const href = `/bookings/${b.id}`;
-          const isNonFlight = isHotel || isHoliday || isVisa || isBus;
-          const refLabel = isVisa ? 'App' : isBus ? 'TIN' : isNonFlight ? 'Conf' : 'PNR';
+          const isNonFlight = isHotel || isHoliday || isVisa || isBus || isInsurance;
+          const refLabel = isInsurance
+            ? 'Policy'
+            : isVisa
+              ? 'App'
+              : isBus
+                ? 'TIN'
+                : isNonFlight
+                  ? 'Conf'
+                  : 'PNR';
           return (
             <Link
               href={href}
