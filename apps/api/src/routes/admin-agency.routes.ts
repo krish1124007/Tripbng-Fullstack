@@ -35,6 +35,12 @@ import {
   runCreditExposureReport,
   runDiPayoutReport,
 } from '../services/wallet/reports.service.js';
+import {
+  creditExposureToPdf,
+  creditExposureToXlsx,
+  diPayoutToPdf,
+  diPayoutToXlsx,
+} from '../services/wallet/report-exporters.js';
 
 export const adminAgencyRouter: RouterT = Router();
 
@@ -492,12 +498,42 @@ adminAgencyRouter.post(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Report exports
+//
+// All three formats — JSON / XLSX / PDF — go through the same endpoint, picked
+// by `?format=`. Default is JSON so the admin UI's table view can hit the same
+// URL it already does. The XLSX/PDF branches share a JSON pipeline (no extra
+// query) so the data on screen is byte-for-byte the data in the download.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ReportFormat = z.enum(['json', 'xlsx', 'pdf']).default('json');
+
+function attachDownloadHeaders(
+  res: import('express').Response,
+  format: 'xlsx' | 'pdf',
+  filename: string,
+): void {
+  const mime =
+    format === 'xlsx'
+      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : 'application/pdf';
+  res.setHeader('Content-Type', mime);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}-${new Date().toISOString().slice(0, 10)}.${format}"`,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /admin/reports/credit-exposure — credit outstanding aging report
-//   Optional query: ?minOutstandingPaise=N (default 1, i.e. exclude zeros)
+//   Optional query:
+//     ?minOutstandingPaise=N    (default 1, i.e. exclude zeros)
+//     ?format=json|xlsx|pdf     (default json)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CreditExposureQuerySchema = z.object({
   minOutstandingPaise: z.coerce.number().int().nonnegative().optional(),
+  format: ReportFormat,
 });
 
 adminAgencyRouter.get(
@@ -515,6 +551,17 @@ adminAgencyRouter.get(
           ? { minOutstandingPaise: query.minOutstandingPaise }
           : {}),
       });
+      if (query.format === 'xlsx') {
+        const buf = await creditExposureToXlsx(report);
+        attachDownloadHeaders(res, 'xlsx', 'credit-exposure');
+        res.send(buf);
+        return;
+      }
+      if (query.format === 'pdf') {
+        attachDownloadHeaders(res, 'pdf', 'credit-exposure');
+        creditExposureToPdf(report).pipe(res);
+        return;
+      }
       return ok(res, report);
     } catch (err) {
       next(err);
@@ -523,14 +570,16 @@ adminAgencyRouter.get(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /admin/reports/di-payouts?from=YYYY-MM-DD&to=YYYY-MM-DD
+// GET /admin/reports/di-payouts?from=&to=
 //   Period-wise DI incentive + TDS aggregation. Drives Form 26Q feed.
+//     ?format=json|xlsx|pdf     (default json)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DiPayoutQuerySchema = z
   .object({
     from: z.string().datetime(),
     to: z.string().datetime().optional(),
+    format: ReportFormat,
   })
   .refine((d) => !d.to || d.from < d.to, { message: 'from must be before to' });
 
@@ -546,6 +595,17 @@ adminAgencyRouter.get(
         from: new Date(query.from),
         ...(query.to ? { to: new Date(query.to) } : {}),
       });
+      if (query.format === 'xlsx') {
+        const buf = await diPayoutToXlsx(report);
+        attachDownloadHeaders(res, 'xlsx', 'di-payouts');
+        res.send(buf);
+        return;
+      }
+      if (query.format === 'pdf') {
+        attachDownloadHeaders(res, 'pdf', 'di-payouts');
+        diPayoutToPdf(report).pipe(res);
+        return;
+      }
       return ok(res, report);
     } catch (err) {
       next(err);
