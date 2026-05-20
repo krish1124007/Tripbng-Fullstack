@@ -63,6 +63,7 @@ export type AlertChannel = 'email' | 'whatsapp' | 'inapp';
  *  concrete email + mobile via the recipient resolver before queueing. */
 export type RecipientRef =
   | { kind: 'agency'; id: string | Types.ObjectId }
+  | { kind: 'distributor'; id: string | Types.ObjectId }
   | { kind: 'user'; id: string | Types.ObjectId }
   | { kind: 'booking_contact'; bookingId: string | Types.ObjectId }
   | { kind: 'ops' } // routes to env.OPS_ALERT_EMAIL

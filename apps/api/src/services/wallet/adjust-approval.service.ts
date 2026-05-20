@@ -378,11 +378,9 @@ async function notifyAdjustmentPosted(
 
     const recipientRef = input.agencyId
       ? ({ kind: 'agency', id: input.agencyId } as const)
-      : // For distributor adjustments we don't have a 'distributor' recipient
-        // kind — skip the notification rather than mis-route. Audit + admin UI
-        // already record the change; a follow-up can add a Distributor.ownerUserId
-        // resolver step here.
-        null;
+      : input.distributorId
+        ? ({ kind: 'distributor', id: input.distributorId } as const)
+        : null;
     if (!recipientRef) return;
 
     await enqueueAlert(

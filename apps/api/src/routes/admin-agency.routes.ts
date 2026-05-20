@@ -31,6 +31,10 @@ import {
   proposeAdjustment,
   rejectAdjustment,
 } from '../services/wallet/adjust-approval.service.js';
+import {
+  runCreditExposureReport,
+  runDiPayoutReport,
+} from '../services/wallet/reports.service.js';
 
 export const adminAgencyRouter: RouterT = Router();
 
@@ -481,6 +485,68 @@ adminAgencyRouter.post(
         outLedgerId: recall.outLedgerId ? String(recall.outLedgerId) : null,
         inLedgerId: recall.inLedgerId ? String(recall.inLedgerId) : null,
       });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/reports/credit-exposure — credit outstanding aging report
+//   Optional query: ?minOutstandingPaise=N (default 1, i.e. exclude zeros)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CreditExposureQuerySchema = z.object({
+  minOutstandingPaise: z.coerce.number().int().nonnegative().optional(),
+});
+
+adminAgencyRouter.get(
+  '/reports/credit-exposure',
+  validate(CreditExposureQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const query = req.query as unknown as ReturnType<
+        typeof CreditExposureQuerySchema.parse
+      >;
+      const report = await runCreditExposureReport({
+        tenantId: req.auth!.tenantId,
+        ...(query.minOutstandingPaise !== undefined
+          ? { minOutstandingPaise: query.minOutstandingPaise }
+          : {}),
+      });
+      return ok(res, report);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/reports/di-payouts?from=YYYY-MM-DD&to=YYYY-MM-DD
+//   Period-wise DI incentive + TDS aggregation. Drives Form 26Q feed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DiPayoutQuerySchema = z
+  .object({
+    from: z.string().datetime(),
+    to: z.string().datetime().optional(),
+  })
+  .refine((d) => !d.to || d.from < d.to, { message: 'from must be before to' });
+
+adminAgencyRouter.get(
+  '/reports/di-payouts',
+  validate(DiPayoutQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const query = req.query as unknown as ReturnType<typeof DiPayoutQuerySchema.parse>;
+      const report = await runDiPayoutReport({
+        tenantId: req.auth!.tenantId,
+        from: new Date(query.from),
+        ...(query.to ? { to: new Date(query.to) } : {}),
+      });
+      return ok(res, report);
     } catch (err) {
       next(err);
     }
