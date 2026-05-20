@@ -60,6 +60,25 @@ export const CancelBookingRequestSchema = z.object({
 });
 export type CancelBookingRequest = z.infer<typeof CancelBookingRequestSchema>;
 
+/**
+ * Issue a manually-routed booking — Phase 5. After ops issues the ticket
+ * out-of-band (another GDS, phone call, e-mail), this endpoint stamps the
+ * PNR + supplier reference + ticket numbers onto the booking row and
+ * transitions PENDING_MANUAL → TICKETED. The wallet has already been
+ * debited at confirm-time so no money moves here.
+ *
+ * `supplierBookingRef` is the supplier-side reference (e.g. PCC/file
+ * number on a GDS) used to look the booking up if cancellation goes
+ * through the supplier API later. Optional but strongly recommended.
+ */
+export const IssueManuallyRequestSchema = z.object({
+  pnr: z.string().trim().min(1).max(20),
+  ticketNumbers: z.array(z.string().trim().min(1).max(40)).min(1).max(50),
+  supplierBookingRef: z.string().trim().min(1).max(80).optional(),
+  note: z.string().trim().max(500).optional(),
+});
+export type IssueManuallyRequest = z.infer<typeof IssueManuallyRequestSchema>;
+
 export const PublicBookingPassengerSchema = z.object({
   type: z.enum(PAX_TYPE),
   title: z.string(),

@@ -46,6 +46,11 @@ export const PERMISSIONS = {
    *  auto-refund (cancel / ticket-failure) path. Limited to platform
    *  admins + accounts users; agencies cannot refund themselves. */
   'booking:refund:manual': ['SUPER_ADMIN', 'ACCOUNTS_USER'],
+  /** Finalize a PENDING_MANUAL booking (Phase 5) — supplier PNR + ref +
+   *  ticket numbers are filled in by ops after they issue manually, then
+   *  this transitions the booking to TICKETED. Wallet was already
+   *  debited at confirm-time so this is a metadata-only write. */
+  'booking:issue-manual': ['SUPER_ADMIN', 'ACCOUNTS_USER', 'SUPPORT_AGENT'],
 
   // Search
   'search:flights': ['AGENCY', 'SUB_AGENT', 'SUPER_ADMIN'],

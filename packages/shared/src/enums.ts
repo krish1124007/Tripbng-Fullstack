@@ -39,6 +39,11 @@ export const BOOKING_STATUS = [
   'TICKETING_IN_PROGRESS',
   'CONFIRMED',
   'TICKETED',
+  // Phase 5 — booking matched a Map Source with manual-issuance pendingBooking
+  // criteria. The wallet was debited as usual but the supplier API was NOT
+  // called. Ops issues the PNR + supplier reference manually via the admin
+  // endpoint, which transitions the booking to TICKETED.
+  'PENDING_MANUAL',
   'CANCEL_REQUESTED',
   'CANCELLED',
   'REFUND_PENDING',

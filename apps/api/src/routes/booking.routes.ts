@@ -6,6 +6,7 @@ import {
   CancelBookingRequestSchema,
   ConfirmBookingRequestSchema,
   HoldRequestSchema,
+  IssueManuallyRequestSchema,
   ManualRefundRequestSchema,
 } from '@tripbng/shared';
 import { authenticate, requireAuth } from '../middleware/auth.js';
@@ -13,10 +14,12 @@ import { requirePermission } from '../middleware/rbac.js';
 import { validate } from '../utils/validate.js';
 import { ok, created } from '../utils/response.js';
 import { Booking } from '../models/Booking.js';
+import { HotelBooking, type HotelBookingDoc } from '../models/HotelBooking.js';
 import {
   cancelBooking,
   confirmBooking,
   holdBooking,
+  issueManually,
   serializeBooking,
 } from '../services/booking.service.js';
 import { generateETicketPdf, generateInvoicePdf } from '../services/booking-pdf.js';
@@ -183,14 +186,56 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       if (q.to) range.$lte = q.to;
       filter.travelDate = range;
     }
-    const [items, total] = await Promise.all([
-      Booking.find(filter)
-        .sort({ createdAt: -1 })
-        .skip((q.page - 1) * q.limit)
-        .limit(q.limit),
+
+    // Hotel-booking filter mirrors the flight filter but doesn't take a
+    // status query (the status enums differ — q.status is a flight status,
+    // and we explicitly DON'T cross-filter hotels by it; users either get
+    // all hotels back or none of them when filtering by a flight-only
+    // status). The web UI's "On hold / Ticketed / Cancelled" tabs are
+    // flight-shaped today; once a hotel-aware filter ships, this branch
+    // grows.
+    const hotelFilter: Record<string, unknown> = listFilter(req.auth!);
+    if (q.q) {
+      hotelFilter.$or = [
+        { bookingCode: new RegExp(q.q, 'i') },
+        { 'hotel.name': new RegExp(q.q, 'i') },
+        { 'supplierRefs.confirmationNo': new RegExp(q.q, 'i') },
+      ];
+    }
+    if (q.from || q.to) {
+      const range: Record<string, Date> = {};
+      if (q.from) range.$gte = q.from;
+      if (q.to) range.$lte = q.to;
+      hotelFilter.checkIn = range;
+    }
+    // Suppress hotel rows when a flight-only status filter is active — they
+    // wouldn't match anyway, but skipping the query saves a round-trip.
+    const skipHotels = !!q.status;
+
+    // Fetch a generous slice from each collection, then merge + paginate in
+    // memory. This is fine for dev/agency scales (typically <1000 bookings
+    // per agency); when we grow past that we'll need a proper cursor-based
+    // merge or a unified Bookings collection.
+    const fetchLimit = q.page * q.limit;
+    const [flights, hotels, flightTotal, hotelTotal] = await Promise.all([
+      Booking.find(filter).sort({ createdAt: -1 }).limit(fetchLimit),
+      skipHotels
+        ? Promise.resolve<HotelBookingDoc[]>([])
+        : HotelBooking.find(hotelFilter).sort({ createdAt: -1 }).limit(fetchLimit),
       Booking.countDocuments(filter),
+      skipHotels ? Promise.resolve(0) : HotelBooking.countDocuments(hotelFilter),
     ]);
-    return ok(res, items.map(serializeBooking), {
+
+    const merged = [
+      ...flights.map((b) => ({ at: b.createdAt, item: serializeBooking(b) })),
+      ...hotels.map((h) => ({ at: h.createdAt, item: serializeHotelBookingAsPublic(h) })),
+    ]
+      .sort((a, b) => b.at.getTime() - a.at.getTime())
+      .slice((q.page - 1) * q.limit, q.page * q.limit)
+      .map((r) => r.item);
+
+    const total = flightTotal + hotelTotal;
+    return ok(res, merged, {
       page: q.page,
       limit: q.limit,
       total,
@@ -200,6 +245,116 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
     next(err);
   }
 });
+
+/**
+ * Map a HotelBooking row into the PublicBooking shape the web's unified
+ * /bookings list expects. We synthesize the flight-shaped fields with
+ * hotel-appropriate values so the existing UI columns (sector, travel
+ * date, pax, total, status badge) render without code churn. The
+ * `productType: 'HOTEL'` field is the discriminator if the UI wants to
+ * branch on it (e.g. icon swap).
+ */
+function serializeHotelBookingAsPublic(h: HotelBookingDoc): Record<string, unknown> {
+  // Map hotel status → flight-shaped enum so the existing StatusBadge
+  // component picks the right colour. Hotel statuses VOUCHERED / CONFIRMED
+  // both surface as TICKETED (the "everything went through" green state);
+  // BOOK_FAILED → FAILED; HELD → HOLD; CANCELLED → CANCELLED.
+  const hotelToFlightStatus: Record<string, string> = {
+    DRAFT: 'INITIATED',
+    AWAITING_APPROVAL: 'INITIATED',
+    APPROVED: 'INITIATED',
+    BOOK_FAILED: 'FAILED',
+    HELD: 'HOLD',
+    PENDING_SUPPLIER: 'PAYMENT_PENDING',
+    CONFIRMED: 'TICKETED',
+    VOUCHERED: 'TICKETED',
+    CANCEL_REQUESTED: 'CANCEL_REQUESTED',
+    CANCEL_PROCESSING: 'CANCEL_REQUESTED',
+    CANCELLED: 'CANCELLED',
+    CANCEL_REJECTED: 'CONFIRMED',
+  };
+
+  return {
+    id: String(h._id),
+    bookingCode: h.bookingCode ?? `HTL-${String(h._id).slice(-6)}`,
+    status: hotelToFlightStatus[h.status] ?? 'CONFIRMED',
+    channel: 'ONLINE',
+    flowSubType: 'HOTEL',
+    productType: 'HOTEL',
+
+    pnr: h.supplierRefs?.confirmationNo ?? null,
+    airlinePnr: null,
+    ticketNumbers: [],
+
+    agencyId: h.agencyId ? String(h.agencyId) : '',
+    agencyCode: '',
+    agencyName: h.hotel?.name ?? '',
+    distributorId: h.distributorId ? String(h.distributorId) : null,
+    bookedByUserId: String(h.bookedByUserId),
+
+    // Show "HOTEL · {city}" in the sector column.
+    sector: `HOTEL · ${h.hotel?.address ?? h.hotel?.name ?? '—'}`,
+    travelDate: h.checkIn.toISOString(),
+    returnDate: h.checkOut.toISOString(),
+    tripType: 'ONEWAY',
+    travelClass: 'ECONOMY',
+
+    segments: [],
+    passengers: (h.guests ?? []).map((g) => ({
+      type: g.paxType === 'Child' ? 'CHILD' : 'ADULT',
+      title: g.title ?? 'MR',
+      firstName: g.firstName ?? '',
+      lastName: g.lastName ?? '',
+      ticketNumber: null,
+      fareCategory: 'REGULAR',
+    })),
+    contact: {
+      email: h.guests?.[0]?.email ?? '',
+      mobile: h.guests?.[0]?.phone ?? '',
+      countryCode: '+91',
+    },
+    gst: h.gst?.gstin
+      ? {
+          number: h.gst.gstin,
+          companyName: h.gst.companyName ?? '',
+          address: h.gst.companyAddress ?? '',
+        }
+      : null,
+
+    pricing: {
+      baseFarePaise: h.pricing?.totalSellingPaise ?? 0,
+      taxesPaise: 0,
+      policyAdjustmentPaise: 0,
+      platformMarkupPaise: 0,
+      distributorMarkupPaise: 0,
+      agencyMarkupPaise: 0,
+      discountPaise: 0,
+      gstPaise: 0,
+      grossAmountPaise: h.pricing?.totalSellingPaise ?? 0,
+      netToSupplierPaise: h.pricing?.totalNetPaise ?? 0,
+      agencyPayablePaise: h.pricing?.totalSellingPaise ?? 0,
+      distributorEarningsPaise: 0,
+      platformEarningsPaise: 0,
+      currency: 'INR',
+    },
+    pricingTrace: [],
+
+    paymentMode: 'WALLET',
+    paymentStatus: ['VOUCHERED', 'CONFIRMED'].includes(h.status) ? 'PAID' : 'PENDING',
+
+    initiatedAt: h.createdAt.toISOString(),
+    heldAt: null,
+    ticketedAt: h.vouchredAt?.toISOString() ?? h.confirmedAt?.toISOString() ?? null,
+    voidWindowEndsAt: null,
+    cancelledAt: h.cancelledAt?.toISOString() ?? null,
+    expiresAt: null,
+    refundedAt: null,
+    internalNotes: null,
+
+    createdAt: h.createdAt.toISOString(),
+    updatedAt: h.updatedAt.toISOString(),
+  };
+}
 
 bookingRouter.get('/:id', async (req, res, next) => {
   try {
@@ -314,6 +469,50 @@ bookingRouter.post(
         amountPaise: body.amountPaise,
         walletTxnId: txnId,
       });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * POST /bookings/:id/issue-manually — Phase 5 admin op.
+ *
+ * Finalize a PENDING_MANUAL booking by attaching the supplier PNR + ticket
+ * numbers (+ optional supplier reference) ops obtained out-of-band. Wallet
+ * was already debited at confirm time, so this only transitions metadata.
+ * Permission-gated to admin-grade roles (`booking:issue-manual`).
+ */
+bookingRouter.post(
+  '/:id/issue-manually',
+  requirePermission('booking:issue-manual'),
+  validate(IssueManuallyRequestSchema),
+  async (req, res, next) => {
+    try {
+      if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
+      const body = req.body as ReturnType<typeof IssueManuallyRequestSchema.parse>;
+      const booking = await issueManually(
+        {
+          tenantId: req.auth!.tenantId,
+          userId: req.auth!.userId,
+          role: req.auth!.role,
+          // The admin actor doesn't necessarily belong to the agency that
+          // owns the booking — tenant scoping inside the service is what
+          // matters. Pass empty string so the BookingActor shape stays
+          // satisfied; the service doesn't read agencyId here.
+          agencyId: req.auth!.agencyId ?? '',
+          distributorId: req.auth!.distributorId,
+          ipAddress: req.ip ?? null,
+        },
+        req.params.id,
+        {
+          pnr: body.pnr,
+          ticketNumbers: body.ticketNumbers,
+          supplierBookingRef: body.supplierBookingRef ?? null,
+          note: body.note ?? null,
+        },
+      );
+      return ok(res, serializeBooking(booking));
     } catch (err) {
       next(err);
     }
