@@ -103,12 +103,13 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
   if (!b) return <p className="text-sm text-ink-3">Booking not found.</p>;
 
   const canCancel = ['HOLD', 'TICKETED', 'CONFIRMED'].includes(b.status);
-  // Server adds `productType: 'HOTEL'` for HotelBooking rows but it's not on
-  // the shared PublicBooking schema yet — read through an unknown cast.
-  // flowSubType also flips to 'HOTEL' as a backup signal for older clients.
-  const isHotel =
-    (b as unknown as { productType?: string }).productType === 'HOTEL' ||
-    (b.flowSubType as unknown as string) === 'HOTEL';
+  // Server adds productType='HOTEL' or 'HOLIDAY' for non-flight rows.
+  // flowSubType backups the discriminator for older clients.
+  const productType =
+    (b as unknown as { productType?: string }).productType ?? 'FLIGHT';
+  const isHotel = productType === 'HOTEL' || (b.flowSubType as unknown as string) === 'HOTEL';
+  const isHoliday =
+    productType === 'HOLIDAY' || (b.flowSubType as unknown as string) === 'HOLIDAY';
   const checkOutStr = b.returnDate
     ? new Date(b.returnDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })
     : null;
@@ -116,12 +117,14 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow={isHotel ? 'HOTEL' : b.flowSubType}
+        eyebrow={isHoliday ? 'HOLIDAY' : isHotel ? 'HOTEL' : b.flowSubType}
         title={b.bookingCode}
         description={
-          isHotel
-            ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOTEL · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
-            : `PNR ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+          isHoliday
+            ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOLIDAY · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+            : isHotel
+              ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOTEL · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+              : `PNR ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
         }
         actions={
           <div className="flex items-center gap-2">
@@ -130,7 +133,7 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
                 <ArrowLeft className="h-4 w-4" /> All bookings
               </Link>
             </Button>
-            {b.status === 'TICKETED' && !isHotel ? (
+            {b.status === 'TICKETED' && !isHotel && !isHoliday ? (
               <Button variant="secondary" onClick={() => downloadPdf('ticket')}>
                 <Plane className="h-4 w-4" /> e-Ticket
               </Button>
@@ -185,7 +188,43 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
         </Card>
       </div>
 
-      {isHotel ? (
+      {isHoliday ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Holiday itinerary</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <HotelIcon className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-ink-1">
+                      {b.sector.replace(/^HOLIDAY · /, '')}
+                    </p>
+                    <p className="text-xs text-ink-3">Confirmation {b.pnr ?? '—'}</p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">MOCK SUPPLIER</Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Departure</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Return</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {checkOutStr ?? '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isHotel ? (
         <Card>
           <CardContent className="p-6">
             <p className="text-xs uppercase tracking-wider text-ink-3">Hotel stay</p>

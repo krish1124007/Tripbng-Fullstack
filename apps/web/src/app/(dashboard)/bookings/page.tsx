@@ -73,18 +73,15 @@ export default function BookingsPage() {
         header: 'Booking',
         cell: ({ row }) => {
           const b = row.original;
-          // Server attaches productType='HOTEL' for hotel-source rows; the
-          // shared PublicBooking type doesn't know about it yet, so we read
-          // through an unknown-cast. flowSubType also flips to 'HOTEL' for
-          // these rows — either signal works as a discriminator.
-          const isHotel =
-            (b as unknown as { productType?: string }).productType === 'HOTEL' ||
-            b.flowSubType === ('HOTEL' as never);
-          const Icon = isHotel ? HotelIcon : Plane;
-          // Both flight and hotel rows now open the same /bookings/[id]
-          // detail page — the page detects productType=HOTEL and renders
-          // a hotel-shaped layout (stay card instead of itinerary,
-          // confirmation no instead of PNR, no e-Ticket button).
+          const productType =
+            (b as unknown as { productType?: string }).productType ?? 'FLIGHT';
+          const isHotel = productType === 'HOTEL' || b.flowSubType === ('HOTEL' as never);
+          const isHoliday =
+            productType === 'HOLIDAY' || b.flowSubType === ('HOLIDAY' as never);
+          const Icon = isHotel || isHoliday ? HotelIcon : Plane;
+          // All product types now open /bookings/[id] — the detail page
+          // discriminates on productType and renders flight / hotel /
+          // holiday layouts accordingly.
           const href = `/bookings/${b.id}`;
           return (
             <Link
@@ -97,7 +94,7 @@ export default function BookingsPage() {
               <div className="min-w-0">
                 <p className="font-mono text-xs font-bold text-ink-1">{b.bookingCode}</p>
                 <p className="font-mono text-[10px] text-ink-3">
-                  {isHotel ? 'Conf' : 'PNR'} {b.pnr ?? '—'}
+                  {isHotel || isHoliday ? 'Conf' : 'PNR'} {b.pnr ?? '—'}
                 </p>
               </div>
             </Link>

@@ -15,6 +15,7 @@ import { validate } from '../utils/validate.js';
 import { ok, created } from '../utils/response.js';
 import { Booking } from '../models/Booking.js';
 import { HotelBooking, type HotelBookingDoc } from '../models/HotelBooking.js';
+import { HolidayBooking, type HolidayBookingDoc } from '../models/HolidayBooking.js';
 import {
   cancelBooking,
   confirmBooking,
@@ -22,7 +23,12 @@ import {
   issueManually,
   serializeBooking,
 } from '../services/booking.service.js';
-import { generateETicketPdf, generateHotelInvoicePdf, generateInvoicePdf } from '../services/booking-pdf.js';
+import {
+  generateETicketPdf,
+  generateHolidayInvoicePdf,
+  generateHotelInvoicePdf,
+  generateInvoicePdf,
+} from '../services/booking-pdf.js';
 import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { requireNotFrozen } from '../middleware/cutover-freeze.js';
 import {
@@ -236,29 +242,77 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       }
     }
 
+    // Holiday filter mirrors the hotel one. Holiday-status enum is its
+    // own (DRAFT/CONFIRMED/CANCEL_REQUESTED/CANCELLED/BOOK_FAILED); we
+    // map flight tabs to it the same way we did for hotels.
+    const FLIGHT_TO_HOLIDAY_STATUSES: Record<string, string[] | null> = {
+      INITIATED: ['DRAFT'],
+      HOLD: null, // holidays don't hold
+      PAYMENT_PENDING: null,
+      TICKETING_IN_PROGRESS: null,
+      CONFIRMED: ['CONFIRMED'],
+      TICKETED: ['CONFIRMED'],
+      PENDING_MANUAL: null,
+      CANCEL_REQUESTED: ['CANCEL_REQUESTED'],
+      CANCELLED: ['CANCELLED'],
+      REFUND_PENDING: null,
+      REFUNDED: null,
+      FAILED: ['BOOK_FAILED'],
+      EXPIRED: null,
+    };
+    const holidayFilter: Record<string, unknown> = listFilter(req.auth!);
+    if (q.q) {
+      holidayFilter.$or = [
+        { bookingCode: new RegExp(q.q, 'i') },
+        { packageTitle: new RegExp(q.q, 'i') },
+        { destination: new RegExp(q.q, 'i') },
+        { 'supplierRefs.confirmationNo': new RegExp(q.q, 'i') },
+      ];
+    }
+    if (q.from || q.to) {
+      const range: Record<string, Date> = {};
+      if (q.from) range.$gte = q.from;
+      if (q.to) range.$lte = q.to;
+      holidayFilter.departureDate = range;
+    }
+    let skipHolidays = false;
+    if (q.status) {
+      const mapped = FLIGHT_TO_HOLIDAY_STATUSES[q.status];
+      if (mapped === null) {
+        skipHolidays = true;
+      } else if (mapped) {
+        holidayFilter.status = { $in: mapped };
+      }
+    }
+
     // Fetch a generous slice from each collection, then merge + paginate in
     // memory. This is fine for dev/agency scales (typically <1000 bookings
     // per agency); when we grow past that we'll need a proper cursor-based
     // merge or a unified Bookings collection.
     const fetchLimit = q.page * q.limit;
-    const [flights, hotels, flightTotal, hotelTotal] = await Promise.all([
+    const [flights, hotels, holidays, flightTotal, hotelTotal, holidayTotal] = await Promise.all([
       Booking.find(filter).sort({ createdAt: -1 }).limit(fetchLimit),
       skipHotels
         ? Promise.resolve<HotelBookingDoc[]>([])
         : HotelBooking.find(hotelFilter).sort({ createdAt: -1 }).limit(fetchLimit),
+      skipHolidays
+        ? Promise.resolve<HolidayBookingDoc[]>([])
+        : HolidayBooking.find(holidayFilter).sort({ createdAt: -1 }).limit(fetchLimit),
       Booking.countDocuments(filter),
       skipHotels ? Promise.resolve(0) : HotelBooking.countDocuments(hotelFilter),
+      skipHolidays ? Promise.resolve(0) : HolidayBooking.countDocuments(holidayFilter),
     ]);
 
     const merged = [
       ...flights.map((b) => ({ at: b.createdAt, item: serializeBooking(b) })),
       ...hotels.map((h) => ({ at: h.createdAt, item: serializeHotelBookingAsPublic(h) })),
+      ...holidays.map((h) => ({ at: h.createdAt, item: serializeHolidayBookingAsPublic(h) })),
     ]
       .sort((a, b) => b.at.getTime() - a.at.getTime())
       .slice((q.page - 1) * q.limit, q.page * q.limit)
       .map((r) => r.item);
 
-    const total = flightTotal + hotelTotal;
+    const total = flightTotal + hotelTotal + holidayTotal;
     return ok(res, merged, {
       page: q.page,
       limit: q.limit,
@@ -380,6 +434,102 @@ function serializeHotelBookingAsPublic(h: HotelBookingDoc): Record<string, unkno
   };
 }
 
+/**
+ * Map a HolidayBooking row into the PublicBooking shape the web's unified
+ * /bookings list expects. Same pattern as serializeHotelBookingAsPublic —
+ * the row synthesizes flight-shaped fields with holiday-appropriate values,
+ * and the productType='HOLIDAY' discriminator lets the UI swap render
+ * paths (sector, status icons, detail layout).
+ */
+function serializeHolidayBookingAsPublic(h: HolidayBookingDoc): Record<string, unknown> {
+  const HOLIDAY_TO_FLIGHT_STATUS: Record<string, string> = {
+    DRAFT: 'INITIATED',
+    CONFIRMED: 'TICKETED',
+    CANCEL_REQUESTED: 'CANCEL_REQUESTED',
+    CANCELLED: 'CANCELLED',
+    BOOK_FAILED: 'FAILED',
+  };
+  return {
+    id: String(h._id),
+    bookingCode: h.bookingCode ?? `HOL-${String(h._id).slice(-6)}`,
+    status: HOLIDAY_TO_FLIGHT_STATUS[h.status] ?? 'CONFIRMED',
+    channel: 'ONLINE',
+    flowSubType: 'HOLIDAY',
+    productType: 'HOLIDAY',
+
+    pnr: h.supplierRefs?.confirmationNo ?? null,
+    airlinePnr: null,
+    ticketNumbers: [],
+
+    agencyId: h.agencyId ? String(h.agencyId) : '',
+    agencyCode: '',
+    agencyName: h.packageTitle,
+    distributorId: h.distributorId ? String(h.distributorId) : null,
+    bookedByUserId: String(h.bookedByUserId),
+
+    sector: `HOLIDAY · ${h.destination ?? h.packageTitle}`,
+    travelDate: h.departureDate.toISOString(),
+    returnDate: h.returnDate.toISOString(),
+    tripType: 'ONEWAY',
+    travelClass: 'ECONOMY',
+
+    segments: [],
+    passengers: (h.travellers ?? []).map((g) => ({
+      type: g.paxType === 'Child' ? 'CHILD' : 'ADULT',
+      title: g.title ?? 'MR',
+      firstName: g.firstName ?? '',
+      lastName: g.lastName ?? '',
+      ticketNumber: null,
+      fareCategory: 'REGULAR',
+    })),
+    contact: {
+      email: h.travellers?.[0]?.email ?? '',
+      mobile: h.travellers?.[0]?.phone ?? '',
+      countryCode: '+91',
+    },
+    gst: h.gst?.gstin
+      ? {
+          number: h.gst.gstin,
+          companyName: h.gst.companyName ?? '',
+          address: h.gst.companyAddress ?? '',
+        }
+      : null,
+
+    pricing: {
+      baseFarePaise: h.pricing?.subtotalPaise ?? 0,
+      taxesPaise: h.pricing?.gstPaise ?? 0,
+      policyAdjustmentPaise: 0,
+      platformMarkupPaise: 0,
+      distributorMarkupPaise: 0,
+      agencyMarkupPaise: 0,
+      discountPaise: 0,
+      gstPaise: h.pricing?.gstPaise ?? 0,
+      grossAmountPaise: h.pricing?.totalPaise ?? 0,
+      netToSupplierPaise: h.pricing?.subtotalPaise ?? 0,
+      agencyPayablePaise: h.pricing?.totalPaise ?? 0,
+      distributorEarningsPaise: 0,
+      platformEarningsPaise: 0,
+      currency: 'INR',
+    },
+    pricingTrace: [],
+
+    paymentMode: 'WALLET',
+    paymentStatus: h.status === 'CONFIRMED' ? 'PAID' : 'PENDING',
+
+    initiatedAt: h.createdAt.toISOString(),
+    heldAt: null,
+    ticketedAt: h.confirmedAt?.toISOString() ?? null,
+    voidWindowEndsAt: null,
+    cancelledAt: h.cancelledAt?.toISOString() ?? null,
+    expiresAt: null,
+    refundedAt: null,
+    internalNotes: null,
+
+    createdAt: h.createdAt.toISOString(),
+    updatedAt: h.updatedAt.toISOString(),
+  };
+}
+
 bookingRouter.get('/:id', async (req, res, next) => {
   try {
     if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
@@ -393,6 +543,8 @@ bookingRouter.get('/:id', async (req, res, next) => {
     if (b) return ok(res, serializeBooking(b));
     const h = await HotelBooking.findOne(filter);
     if (h) return ok(res, serializeHotelBookingAsPublic(h));
+    const hol = await HolidayBooking.findOne(filter);
+    if (hol) return ok(res, serializeHolidayBookingAsPublic(hol));
     throw new AppError('NOT_FOUND');
   } catch (err) {
     next(err);
@@ -410,11 +562,59 @@ bookingRouter.post(
       const body = req.body as ReturnType<typeof CancelBookingRequestSchema.parse>;
 
       // Disambiguate flight vs hotel by collection. Flight cancel goes
-      // through the full state-machine service; hotel cancel for mock
-      // supplier is an in-line transition + wallet credit (no TBO round
-      // trip available without real creds).
-      const isHotel = !(await Booking.exists({ _id: req.params.id, tenantId: req.auth!.tenantId }));
-      if (isHotel) {
+      // through the full state-machine service; hotel + holiday cancels
+      // for mock supplier are inline transitions + wallet credits (no
+      // TBO round trip available without real creds).
+      const filterScope = { _id: req.params.id, tenantId: req.auth!.tenantId };
+      const flightExists = await Booking.exists(filterScope);
+      const hotelExists = !flightExists && (await HotelBooking.exists(filterScope));
+      const holidayExists =
+        !flightExists && !hotelExists && (await HolidayBooking.exists(filterScope));
+
+      if (holidayExists) {
+        if (!req.auth!.agencyId) {
+          throw new AppError('VALIDATION_ERROR', { reason: 'agency context required' });
+        }
+        const filter = listFilter(req.auth!);
+        filter._id = req.params.id;
+        const h = await HolidayBooking.findOne(filter);
+        if (!h) throw new AppError('NOT_FOUND');
+        if (['CANCELLED', 'CANCEL_REQUESTED'].includes(h.status)) {
+          throw new AppError('VALIDATION_ERROR', { reason: 'booking already cancelled' });
+        }
+        // Full refund — real consolidator wiring would walk the
+        // cancellationSchedule on the package to derive partials.
+        const refundPaise = h.pricing?.totalPaise ?? 0;
+        if (refundPaise > 0) {
+          const { walletService } = await import('../services/payment/wallet.service.js');
+          const wallet = await walletService.findOrCreateForAgency(
+            new Types.ObjectId(req.auth!.tenantId),
+            new Types.ObjectId(req.auth!.agencyId),
+          );
+          await walletService.credit({
+            walletId: wallet._id,
+            amount: refundPaise,
+            type: 'REFUND_CREDIT',
+            description: `Holiday cancel ${h.bookingCode ?? String(h._id)} — ${h.packageTitle}`,
+            performedBy: new Types.ObjectId(req.auth!.userId),
+            bookingId: h._id,
+            idempotencyKey: `holiday-cancel-${h._id.toHexString()}`,
+            metadata: { reason: body.reason ?? 'agent-cancel' },
+          });
+        }
+        h.status = 'CANCELLED';
+        h.statusHistory.push({
+          status: 'CANCELLED',
+          at: new Date(),
+          by: new Types.ObjectId(req.auth!.userId),
+          note: body.reason?.slice(0, 200) ?? null,
+        });
+        h.cancelledAt = new Date();
+        await h.save();
+        return ok(res, serializeHolidayBookingAsPublic(h));
+      }
+
+      if (hotelExists) {
         if (!req.auth!.agencyId) {
           throw new AppError('VALIDATION_ERROR', { reason: 'agency context required' });
         }
@@ -663,18 +863,29 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
     filter._id = req.params.id;
     const b = await Booking.findOne(filter);
     if (!b) {
-      // Hotel invoice fallback. Mirrors the flight path below but uses
-      // the hotel-specific PDF generator. Once a real HotelInvoice model
-      // ships (with sequential GST numbers etc.) we'll prefer it here too.
+      // Non-flight invoice fallbacks. Hotel first, then holiday — once
+      // structured invoice models ship for either, prefer them here.
       const h = await HotelBooking.findOne(filter);
-      if (!h) throw new AppError('NOT_FOUND');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="invoice-${h.bookingCode ?? String(h._id)}.pdf"`,
-      );
-      generateHotelInvoicePdf(h).pipe(res);
-      return;
+      if (h) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="invoice-${h.bookingCode ?? String(h._id)}.pdf"`,
+        );
+        generateHotelInvoicePdf(h).pipe(res);
+        return;
+      }
+      const hol = await HolidayBooking.findOne(filter);
+      if (hol) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="invoice-${hol.bookingCode ?? String(hol._id)}.pdf"`,
+        );
+        generateHolidayInvoicePdf(hol).pipe(res);
+        return;
+      }
+      throw new AppError('NOT_FOUND');
     }
 
     // Prefer the structured invoice if one exists.

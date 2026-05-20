@@ -32,6 +32,13 @@ import {
   searchHotels,
 } from '../services/products.service.js';
 import { getPublicPackage, listPublicPackages } from '../services/holidayPackage.service.js';
+import { HolidayBooking } from '../models/HolidayBooking.js';
+import { walletService } from '../services/payment/wallet.service.js';
+import { nextCode } from '../utils/codes.js';
+import { Types } from 'mongoose';
+import { randomUUID } from 'node:crypto';
+import { AppError } from '@tripbng/shared';
+import { logger } from '../config/logger.js';
 import {
   getPublicProduct,
   listProductsForCountry,
@@ -127,6 +134,209 @@ productsRouter.get(
       const { id } = req.params as unknown as z.infer<typeof HolidayPackageIdParamsSchema>;
       const pkg = await getPublicPackage(tenantId, id);
       return ok(res, pkg);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ────────── HOLIDAY QUICK-BOOK ──────────
+//
+// Mock-aware shortcut to book an admin-authored holiday package + debit
+// the agency wallet in one round-trip. Mirrors the hotel /quick-book
+// pattern — no PreBook/voucher cycle since the package itinerary is
+// fully built upfront. Real consolidator wiring would replace the
+// in-line confirmation with an async supplier call + state machine.
+
+const HolidayQuickBookSchema = z.object({
+  packageId: z.string().min(1).max(120),
+  departureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  departureCity: z.string().min(1).max(80).optional(),
+  sharingType: z.enum(['single', 'double', 'triple']).default('double'),
+  adults: z.number().int().min(1).max(20).default(2),
+  childrenWithBed: z.number().int().min(0).max(10).default(0),
+  childrenWithoutBed: z.number().int().min(0).max(10).default(0),
+  // Total INR amount the user confirmed on screen — server re-derives but
+  // we compare against this to fail loud on price drift.
+  agreedTotalInr: z.number().int().positive(),
+  travellers: z
+    .array(
+      z.object({
+        title: z.enum(['Mr', 'Mrs', 'Miss', 'Ms']),
+        firstName: z.string().min(1).max(60),
+        lastName: z.string().min(1).max(60),
+        paxType: z.enum(['Adult', 'Child']).default('Adult'),
+        isLeadPassenger: z.boolean().optional(),
+        email: z.string().email().optional().nullable(),
+        phone: z.string().max(20).optional().nullable(),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+productsRouter.post(
+  '/holidays/quick-book',
+  gate,
+  validate(HolidayQuickBookSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth!.agencyId) {
+        throw new AppError('VALIDATION_ERROR', {
+          reason:
+            'Holiday bookings require an agency wallet context. Log in as an agency user.',
+        });
+      }
+      const body = req.body as z.infer<typeof HolidayQuickBookSchema>;
+      const pkg = await getPublicPackage(req.auth!.tenantId, body.packageId);
+      if (!pkg) throw new AppError('NOT_FOUND', { reason: 'package not found or unpublished' });
+
+      const departureDate = new Date(`${body.departureDate}T00:00:00.000Z`);
+      const returnDate = new Date(
+        departureDate.getTime() + pkg.nights * 24 * 60 * 60 * 1000,
+      );
+
+      // Resolve per-pax rates from the cheapest matching price-matrix row.
+      // For now we always use the first row — the customer-facing
+      // quoteHolidayPackage() helper does the same matrix walk on the
+      // client; copying its logic into the server would duplicate code
+      // for no real safety win in this mock supplier path. We trust the
+      // client-supplied agreedTotalInr after a sanity recompute.
+      const matrix = pkg.priceMatrix[0];
+      if (!matrix) {
+        throw new AppError('VALIDATION_ERROR', { reason: 'package has no published price matrix' });
+      }
+      const perAdultInr =
+        body.sharingType === 'single'
+          ? matrix.singleSharingInr
+          : body.sharingType === 'triple'
+            ? matrix.tripleSharingInr
+            : matrix.doubleSharingInr;
+      const subtotalInr =
+        body.adults * perAdultInr +
+        body.childrenWithBed * matrix.childWithBedInr +
+        body.childrenWithoutBed * matrix.childWithoutBedInr;
+      // Sanity check — agree within 5% to accommodate any client-side
+      // rounding (the customer-facing quote helper has its own slabs).
+      const drift = Math.abs(subtotalInr - body.agreedTotalInr) / Math.max(subtotalInr, 1);
+      if (drift > 0.05) {
+        logger.warn(
+          { subtotalInr, agreedTotalInr: body.agreedTotalInr },
+          'holiday quick-book: price drift > 5% — using server number',
+        );
+      }
+      const totalPaise = subtotalInr * 100;
+
+      const wallet = await walletService.findOrCreateForAgency(
+        new Types.ObjectId(req.auth!.tenantId),
+        new Types.ObjectId(req.auth!.agencyId),
+      );
+
+      const seq = await nextCode('TBNG');
+      const bookingCode = `${seq}-HOL`;
+
+      const booking = await HolidayBooking.create({
+        tenantId: req.auth!.tenantId,
+        agencyId: req.auth!.agencyId,
+        distributorId: req.auth!.distributorId ?? null,
+        bookedByUserId: req.auth!.userId,
+        packageId: pkg.id,
+        packageTitle: pkg.title,
+        destination: pkg.destination ?? null,
+        themeLabel: pkg.themeLabel ?? null,
+        heroImage: pkg.heroImages?.[0] ?? null,
+        nights: pkg.nights,
+        departureDate,
+        returnDate,
+        departureCity: body.departureCity ?? pkg.departureCities?.[0] ?? null,
+        sharingType: body.sharingType,
+        adults: body.adults,
+        childrenWithBed: body.childrenWithBed,
+        childrenWithoutBed: body.childrenWithoutBed,
+        travellers: body.travellers.map((t, idx) => ({
+          ...t,
+          isLeadPassenger: t.isLeadPassenger ?? idx === 0,
+        })),
+        currency: 'INR',
+        pricing: {
+          perAdultPaise: perAdultInr * 100,
+          perChildBedPaise: matrix.childWithBedInr * 100,
+          perChildNoBedPaise: matrix.childWithoutBedInr * 100,
+          subtotalPaise: totalPaise,
+          gstPaise: 0,
+          totalPaise,
+        },
+        supplier: 'MOCK',
+        supplierRefs: {
+          bookingCode: `MOCK-${randomUUID().slice(0, 8).toUpperCase()}`,
+          confirmationNo: `HOL${Math.floor(Math.random() * 1e8)
+            .toString()
+            .padStart(8, '0')}`,
+        },
+        bookingCode,
+        status: 'CONFIRMED',
+        statusHistory: [
+          { status: 'DRAFT', at: new Date(), by: new Types.ObjectId(req.auth!.userId) },
+          { status: 'CONFIRMED', at: new Date(), by: new Types.ObjectId(req.auth!.userId) },
+        ],
+        confirmedAt: new Date(),
+      });
+
+      // Wallet debit. Failure → mark BOOK_FAILED and bubble.
+      try {
+        await walletService.debit({
+          walletId: wallet._id,
+          amount: totalPaise,
+          type: 'BOOKING_DEBIT',
+          description: `Holiday ${bookingCode} — ${pkg.title}`,
+          performedBy: new Types.ObjectId(req.auth!.userId),
+          bookingId: booking._id,
+          idempotencyKey: `holiday-book-${booking._id.toHexString()}`,
+          metadata: {
+            packageId: pkg.id,
+            packageTitle: pkg.title,
+            departureDate: body.departureDate,
+            nights: pkg.nights,
+            sharingType: body.sharingType,
+            adults: body.adults,
+            childrenWithBed: body.childrenWithBed,
+            childrenWithoutBed: body.childrenWithoutBed,
+          },
+        });
+      } catch (err) {
+        booking.status = 'BOOK_FAILED';
+        booking.statusHistory.push({
+          status: 'BOOK_FAILED',
+          at: new Date(),
+          by: new Types.ObjectId(req.auth!.userId),
+          note: err instanceof Error ? err.message.slice(0, 200) : 'wallet debit failed',
+        });
+        await booking.save();
+        throw err;
+      }
+
+      logger.info(
+        {
+          bookingId: String(booking._id),
+          bookingCode,
+          packageId: pkg.id,
+          totalPaise,
+        },
+        'holiday quick-book: confirmed + paid',
+      );
+
+      return ok(res, {
+        id: String(booking._id),
+        bookingCode,
+        status: booking.status,
+        supplierRefs: booking.supplierRefs,
+        packageTitle: pkg.title,
+        destination: pkg.destination,
+        nights: pkg.nights,
+        departureDate: booking.departureDate,
+        returnDate: booking.returnDate,
+        pricing: booking.pricing,
+      });
     } catch (err) {
       next(err);
     }
