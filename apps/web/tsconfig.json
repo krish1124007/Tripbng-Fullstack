@@ -1,7 +1,6 @@
 {
   "extends": "@tripbng/config/tsconfig.next.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
