@@ -153,35 +153,48 @@ import('./src/models/PaymentTransaction.js').then(async ({ PaymentTransaction })
 
 If non-zero, run `paymentService.sweepStalePayments` and re-check.
 
-### 2.3 T+0 — swap the live path
+### 2.3 T+0 — flip the live-path flag
 
-Replace `walletService.credit(...)` in `paymentService.markSuccess`
-with `applyPayment(...)`. Concretely:
+The waterfall and legacy paths both live in `markSuccess`; selection
+is env-flag driven. No code deploy at cutover — just flip the flag.
 
-```ts
-// Before
-const walletTxn = await walletService.credit({ walletId, amount, ... });
-
-// After
-const result = await applyPayment({
-  tenantId: pt.tenantId.toHexString(),
-  agencyId: pt.agencyId.toHexString(),
-  amountPaise: pt.amount,
-  pgReferenceId: pt.gatewayTxnId ?? `pt-${pt._id.toHexString()}`,
-  pgGateway: pt.providerCode as PgGateway,
-  performedBy: pt.initiatedByUserId.toHexString(),
-});
-const walletTxn = result.ledgerEntries.find((e) => e.type === 'TOPUP')
-  ?? result.ledgerEntries[0];
+```env
+WATERFALL_LIVE=true
 ```
 
-Deploy the new build.
+How to apply: update the deploy config (Doppler / Infisical / AWS
+Parameter Store / etc.) and roll restart the API. The flag is read
+once at boot via `apps/api/src/config/env.ts`. Workers that touch
+`markSuccess` (the payment-webhook worker + the reconciliation
+sweep) need the same restart to pick the new value.
 
-### 2.4 T+5 — disable shadow mode (it's now the live path)
+Sanity check after restart — every successful payment should now log
+`creditPath: "waterfall"` for agency-attributed PTs:
+
+```bash
+# Tail the API log for the next ₹1 top-up
+kubectl logs deploy/tripbng-api -f | grep "payment success" | head -3
+# Expect: ..."creditPath":"waterfall","waterfallApplied":true...
+```
+
+Distributor-attributed PTs (no agencyId on the PT) keep going through
+the legacy `walletService.credit` path under the flag — the waterfall
+service only knows about agencies. That's by design; expect to see a
+mix of `creditPath: "waterfall"` and `creditPath: "legacy"` in the
+log stream.
+
+If anything looks off, instant rollback is `WATERFALL_LIVE=false` +
+roll restart. No data migration, no code revert.
+
+### 2.4 T+5 — disable shadow mode
 
 ```env
 SHADOW_WALLET=false
 ```
+
+The shadow-mode log path is auto-suppressed when `WATERFALL_LIVE=true`
+(it would be diffing against a baseline that no longer exists), so
+forgetting this step is benign — just leaves a dead config value.
 
 ### 2.5 T+10 — release the freeze
 
@@ -231,12 +244,15 @@ legacy semantics, then revert.
 redis-cli SET wallet:cutover:freeze "rolling-back" EX 1800
 ```
 
-### 4.2 Revert the deploy
+### 4.2 Flip the flag back
 
-```bash
-git revert <cutover-commit-sha>
-# Push, deploy, verify the build is back to walletService.credit.
+```env
+WATERFALL_LIVE=false
 ```
+
+Roll restart API + workers. The legacy `walletService.credit` branch
+remains in the file as the rollback safety net — no code revert
+needed, no deploy.
 
 ### 4.3 Replay any waterfall-only side effects
 
@@ -273,10 +289,11 @@ redis-cli DEL wallet:cutover:freeze
 
 ## 5. Known unknowns (close before next attempt)
 
-- The `applyPayment` swap in `paymentService.markSuccess` (§2.3) has
-  to land as a separate, focused PR — not as part of this runbook.
-  Code-review checklist: type errors fixed, `walletTxn._id` still
-  attaches to PT, both PHONEPE and ICICI_ORANGE_PG flows tested.
 - `SHADOW_WALLET=true` logs are at `info` level. Consider routing
   them to a dedicated index/topic in your log aggregator so the
   daily review query is one filter, not a regex over all info logs.
+- Distributor-attributed PTs stay on the legacy `walletService.credit`
+  path even with `WATERFALL_LIVE=true`. If you ever need credit-
+  settlement / DI semantics for distributors, the waterfall service
+  needs a `walletKind: 'DISTRIBUTOR'` mode — currently it's
+  agency-only by design.
