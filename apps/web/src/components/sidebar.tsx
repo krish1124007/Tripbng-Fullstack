@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  AlertOctagon,
   ArrowDownToLine,
   ArrowLeftRight,
   BarChart3,
@@ -70,7 +71,36 @@ const NAV: NavGroup[] = [
     label: 'Insights',
     items: [
       { href: '/reports', label: 'Reports', icon: BarChart3, permission: 'report:run' },
+      {
+        href: '/admin/reports/credit-exposure',
+        label: 'Credit exposure',
+        icon: AlertOctagon,
+        permission: 'report:platform',
+      },
+      {
+        href: '/admin/reports/di-payouts',
+        label: 'DI payouts',
+        icon: Gift,
+        permission: 'report:platform',
+      },
       { href: '/audit-logs', label: 'Audit log', icon: ShieldCheck, permission: 'audit:read' },
+    ],
+  },
+  {
+    label: 'Wallet ops',
+    items: [
+      {
+        href: '/admin/wallet-ops/adjustments',
+        label: 'Adjustments',
+        icon: Wallet,
+        permission: 'wallet:adjust',
+      },
+      {
+        href: '/admin/wallet-ops/transfers',
+        label: 'Transfer approvals',
+        icon: ArrowLeftRight,
+        permission: 'wallet:adjust',
+      },
     ],
   },
   {
