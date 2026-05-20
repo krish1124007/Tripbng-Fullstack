@@ -143,9 +143,22 @@ async function main(): Promise<void> {
       resolved: 'unresolved',
       agencyId: null,
     });
+    // List candidate agencies in the same tenant so the operator has a
+    // chooser handy — most prod setups have <20 agencies per tenant, so
+    // this is a manageable list at the terminal.
+    const candidates = tenantAgencies
+      .slice(0, 20)
+      .map((a) => ({ code: a.agencyCode, id: String(a._id), name: a.companyName }));
     logger.error(
-      { user: user.email, userCode: user.userCode, tenantId: String(user.tenantId) },
-      'unresolved — no Agency.ownerUserId match. Set agencyId manually:',
+      {
+        user: user.email,
+        userCode: user.userCode,
+        userId: String(user._id),
+        tenantId: String(user.tenantId),
+        candidates,
+      },
+      `unresolved — no Agency.ownerUserId match. Pick an agencyId from the candidates and run:
+  mongosh "$MONGO_URI" --eval 'db.users.updateOne({_id: ObjectId("${String(user._id)}")}, {$set: {agencyId: ObjectId("<paste-agency-id-here>")}})'`,
     );
   }
 
