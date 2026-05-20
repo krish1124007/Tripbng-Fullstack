@@ -109,6 +109,12 @@ const NAV: NavGroup[] = [
       { href: '/inventories', label: 'Inventory', icon: Boxes, permission: 'inventory:read' },
       { href: '/inventories/calendar', label: 'Calendar', icon: CalendarIcon, permission: 'inventory:read' },
       { href: '/suppliers', label: 'Suppliers', icon: Truck, permission: 'supplier:read' },
+      {
+        href: '/suppliers/map-sources',
+        label: 'Map sources',
+        icon: Truck,
+        permission: 'supplier:read',
+      },
       { href: '/markup-rules', label: 'Markup rules', icon: Percent, permission: 'markup-rule:read' },
       { href: '/fare-rules', label: 'Fare rules', icon: Receipt, permission: 'fare-rule:read' },
       { href: '/policies', label: 'Policies', icon: Tags, permission: 'policy:read' },
