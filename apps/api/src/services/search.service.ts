@@ -19,6 +19,12 @@ import { Agency } from '../models/Agency.js';
 import { Actor, EVENTS, track } from './analytics.service.js';
 import { applyMapSourceFilter } from './search/map-source-filter.service.js';
 import { deriveTravelType } from '../data/airports.js';
+import {
+  applyMapPolicyToBreakdown,
+  logMapPolicyApplied,
+  resolveMapPolicy,
+  resolveSupplierCommissionPaise,
+} from './pricing/map-policy-pricing.service.js';
 
 const CACHE_TTL_SECONDS = 60 * 5;
 
@@ -293,9 +299,21 @@ export async function searchFlights(
 
   const bookingDate = new Date();
   const priced: SearchResult[] = [];
+  // Phase 8 — Map Policy adjustment. Cache commission-percent lookups by
+  // policyId so 50 options sharing one Policy don't trigger 50 queries.
+  const commissionPctCache = new Map<string, number>();
   for (const opt of filtered.options) {
     try {
-      priced.push(await priceOption(opt, ctx, pricingCtx, request, bookingDate));
+      const result = await priceOption(opt, ctx, pricingCtx, request, bookingDate);
+      const adjusted = await maybeApplyMapPolicy(
+        result,
+        opt,
+        ctx,
+        request.pax,
+        pricingCtx.agencyGroupIds,
+        commissionPctCache,
+      );
+      priced.push(adjusted);
     } catch (err) {
       logger.warn({ err, supplierFareId: opt.supplierFareId }, 'pricing failed for option');
     }
@@ -368,3 +386,97 @@ function buildCacheKey(ctx: SearchContext, request: SearchRequest): string {
 }
 
 export { adapterForCode };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8 — Map Policy post-pricing
+//
+// Given a priced SearchResult, find the matching MapPolicy and apply its
+// enabled components to each per-pax FareBreakdown. Recomputes the result's
+// aggregate totals. Pass-through when nothing matches.
+// ─────────────────────────────────────────────────────────────────────────────
+async function maybeApplyMapPolicy(
+  result: SearchResult,
+  opt: FanoutFareOption,
+  ctx: SearchContext,
+  pax: { adults: number; children: number; infants: number },
+  agencyGroupIds: string[],
+  commissionPctCache: Map<string, number>,
+): Promise<SearchResult> {
+  const airline = opt.segments[0]?.airline.code;
+  if (!airline) return result;
+
+  const policy = await resolveMapPolicy({
+    tenantId: ctx.tenantId,
+    productType: 'FLIGHT',
+    airline,
+    fareType: opt.fareClass ?? null,
+    agencyGroupIds,
+  });
+  if (!policy) return result;
+
+  // Commission base — same per-pax base × Policy.commissionPercent for every
+  // pax type; resolveSupplierCommissionPaise reads commissionPercent and
+  // computes the per-pax commission paise.
+  const adultCommission = await resolveSupplierCommissionPaise(
+    opt.policyId ?? null,
+    result.perPax.adult.baseFarePaise,
+    commissionPctCache,
+  );
+  const childCommission = await resolveSupplierCommissionPaise(
+    opt.policyId ?? null,
+    result.perPax.child.baseFarePaise,
+    commissionPctCache,
+  );
+  const infantCommission = await resolveSupplierCommissionPaise(
+    opt.policyId ?? null,
+    result.perPax.infant.baseFarePaise,
+    commissionPctCache,
+  );
+
+  const adultAdj = applyMapPolicyToBreakdown(result.perPax.adult, policy, {
+    supplierCommissionPaise: adultCommission,
+  });
+  const childAdj = applyMapPolicyToBreakdown(result.perPax.child, policy, {
+    supplierCommissionPaise: childCommission,
+  });
+  const infantAdj = applyMapPolicyToBreakdown(result.perPax.infant, policy, {
+    supplierCommissionPaise: infantCommission,
+  });
+
+  // No-op short-circuit. Empty trace = no enabled component fired (or every
+  // component computed to zero paise). Skip the rebuild to keep the result
+  // shape identical for the dedup + sort downstream.
+  if (
+    adultAdj.trace.length === 0 &&
+    childAdj.trace.length === 0 &&
+    infantAdj.trace.length === 0
+  ) {
+    return result;
+  }
+
+  logMapPolicyApplied(
+    policy,
+    adultAdj.totalDeltaPaise + childAdj.totalDeltaPaise + infantAdj.totalDeltaPaise,
+    { fareId: result.id, airline, tenantId: ctx.tenantId },
+  );
+
+  const totalGross =
+    adultAdj.breakdown.grossAmountPaise * pax.adults +
+    childAdj.breakdown.grossAmountPaise * pax.children +
+    infantAdj.breakdown.grossAmountPaise * pax.infants;
+  const totalAgencyPayable =
+    adultAdj.breakdown.agencyPayablePaise * pax.adults +
+    childAdj.breakdown.agencyPayablePaise * pax.children +
+    infantAdj.breakdown.agencyPayablePaise * pax.infants;
+
+  return {
+    ...result,
+    perPax: {
+      adult: adultAdj.breakdown,
+      child: childAdj.breakdown,
+      infant: infantAdj.breakdown,
+    },
+    totalGrossPaise: totalGross,
+    totalAgencyPayablePaise: totalAgencyPayable,
+  };
+}
