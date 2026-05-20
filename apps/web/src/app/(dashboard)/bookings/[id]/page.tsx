@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Clock, Plane, Receipt, ShieldCheck, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -30,8 +30,11 @@ import { downloadAuthenticatedFile } from '@/lib/download';
 import { formatPaiseAsINR } from '@/lib/money';
 import { ApiCallError } from '@/lib/api';
 
-export default function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+// Next.js 14: `params` is a plain object, not a Promise. Don't wrap with
+// React.use() — that's a Next 15 idiom and crashes here with
+// "An unsupported type was passed to use(): [object Object]".
+export default function BookingDetailPage({ params }: { params: { id: string } }) {
+  const { id } = params;
   const accessToken = useAuthStore((s) => s.accessToken);
   const booking = useApiQuery<PublicBooking>(['booking', id], `/api/v1/bookings/${id}`);
   const invalidate = useInvalidateOnSuccess([['bookings'], ['booking', id]]);

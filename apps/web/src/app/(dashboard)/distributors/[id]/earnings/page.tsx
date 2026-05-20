@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Download } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -36,12 +36,15 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Next.js 14: `params` is a plain object, not a Promise. Using
+// React.use(params) here was a Next-15-only idiom that crashed at
+// runtime with "An unsupported type was passed to use()".
 export default function DistributorEarningsPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = use(params);
+  const { id } = params;
 
   const [from, setFrom] = useState(dateMinusDays(30));
   const [to, setTo] = useState(todayStr());
