@@ -3,7 +3,10 @@
 // aren't echoes of a token.
 /** @type {import('tailwindcss').Config} */
 export const tailwindPreset = {
-  darkMode: ['class', '[data-theme="dark"]'],
+  // Dark mode disabled — selector points to a class that's never applied, so
+  // any stray `dark:` Tailwind variants stay inert and `prefers-color-scheme`
+  // can't flip the UI either.
+  darkMode: ['class', '[data-theme="__never__"]'],
   theme: {
     container: {
       center: true,

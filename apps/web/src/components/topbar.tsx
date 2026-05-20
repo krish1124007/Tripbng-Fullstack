@@ -24,7 +24,6 @@ import {
   DropdownMenuTrigger,
   initialsFromName,
 } from '@/components/ui';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { CommandPalette } from '@/components/command-palette';
 import { NotificationsBell } from '@/components/notifications-bell';
 import { CartButton } from '@/components/cart-drawer';
@@ -208,7 +207,6 @@ export function TopBar() {
       <MarkupCalculatorButton />
       <CartButton />
       <NotificationsBell />
-      <ThemeToggle />
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
