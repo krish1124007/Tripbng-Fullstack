@@ -17,6 +17,8 @@ import { Policy } from '../models/Policy.js';
 import { priceFare, type PricingMarkupRule } from './pricing/index.js';
 import { Agency } from '../models/Agency.js';
 import { Actor, EVENTS, track } from './analytics.service.js';
+import { applyMapSourceFilter } from './search/map-source-filter.service.js';
+import { deriveTravelType } from '../data/airports.js';
 
 const CACHE_TTL_SECONDS = 60 * 5;
 
@@ -263,9 +265,35 @@ export async function searchFlights(
   const fanout = await fanoutSearch(adapters, { searchId, request });
 
   const pricingCtx = await loadPricingContext(ctx);
+
+  // Phase 4 — apply the agent's Map Source filter BEFORE pricing. Pricing is
+  // the expensive step (per-pax FareBreakdown + GST + policy resolution); we
+  // don't want to do it for options that won't reach the agent. Pass-through
+  // when no Map Source matches — see service comment for the policy.
+  const travelType = deriveTravelType(segment.origin, segment.destination);
+  const filtered = await applyMapSourceFilter(fanout.options, {
+    tenantId: ctx.tenantId,
+    agencyGroupIds: pricingCtx.agencyGroupIds,
+    productType: 'FLIGHT',
+    travelType,
+  });
+  if (filtered.applied) {
+    logger.info(
+      {
+        searchId,
+        tenantId: ctx.tenantId,
+        before: fanout.options.length,
+        after: filtered.options.length,
+        dropped: filtered.dropped,
+        masked: filtered.masked,
+      },
+      'map-source filter applied to search results',
+    );
+  }
+
   const bookingDate = new Date();
   const priced: SearchResult[] = [];
-  for (const opt of fanout.options) {
+  for (const opt of filtered.options) {
     try {
       priced.push(await priceOption(opt, ctx, pricingCtx, request, bookingDate));
     } catch (err) {

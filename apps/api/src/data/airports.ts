@@ -64,6 +64,32 @@ const PRIORITY_IATA = new Set([
 
 export const AIRPORTS: readonly Airport[] = GENERATED;
 
+// Quick IATA → countryCode lookup. Built once at module load so callers don't
+// have to scan 6k rows on every search request.
+const IATA_TO_COUNTRY: Map<string, string> = new Map(
+  GENERATED.map((a) => [a.iata.toUpperCase(), a.countryCode.toUpperCase()]),
+);
+
+/**
+ * Classify a route as DOMESTIC vs INTERNATIONAL using airport country codes.
+ * Returns DOMESTIC when both origin + destination are in India (countryCode
+ * "IN") or when either airport is unknown (defensive default — keeps existing
+ * behaviour for routes our airport file doesn't cover yet). Returns
+ * INTERNATIONAL the moment either endpoint is outside India.
+ *
+ * Used by Phase 4 of the admin panel spec to pick the right Map Source row
+ * for a given search request.
+ */
+export function deriveTravelType(
+  originIata: string,
+  destinationIata: string,
+): 'DOMESTIC' | 'INTERNATIONAL' {
+  const o = IATA_TO_COUNTRY.get(originIata.toUpperCase());
+  const d = IATA_TO_COUNTRY.get(destinationIata.toUpperCase());
+  if (!o || !d) return 'DOMESTIC';
+  return o === 'IN' && d === 'IN' ? 'DOMESTIC' : 'INTERNATIONAL';
+}
+
 // Naive in-memory search by code, name, or city. ~6k rows; sub-ms in practice.
 // Ranks: exact IATA → priority hub starts-with → other starts-with → contains.
 export function searchAirports(q: string, limit = 10): Airport[] {
