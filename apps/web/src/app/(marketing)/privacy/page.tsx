@@ -65,7 +65,7 @@ export default function PrivacyPage() {
       <p>We share strictly the minimum data required to complete a transaction with:</p>
       <ul>
         <li>Airlines, GDS aggregators, hotel suppliers, charter operators</li>
-        <li>Payment gateways (Razorpay, ICICI Eazypay, PhonePe) for top-ups and refunds</li>
+        <li>Payment gateways (ICICI Bank, PhonePe) for top-ups and refunds</li>
         <li>Tax authorities for GST filings</li>
         <li>Cloud infrastructure providers (AWS Mumbai, MongoDB Atlas) under signed DPAs</li>
         <li>Law-enforcement agencies when lawfully required</li>

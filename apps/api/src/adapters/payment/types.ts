@@ -3,7 +3,7 @@
 
 import type { Types } from 'mongoose';
 
-export type PaymentProviderCode = 'ICICI_EAZYPAY' | 'PHONEPE' | 'RAZORPAY' | 'MANUAL';
+export type PaymentProviderCode = 'ICICI_ORANGE_PG' | 'PHONEPE' | 'MANUAL';
 
 export type PaymentCapability =
   | 'WALLET_TOPUP'
@@ -26,7 +26,7 @@ export interface InitiatePaymentRequest {
   agencyName?: string;
   initiatedByUserId: Types.ObjectId;
   purpose: 'WALLET_TOPUP' | 'BOOKING_PAYMENT' | 'REFUND';
-  /** Free-form per provider — Eazypay's `optional_fields`, etc. */
+  /** Free-form per provider. */
   optionalFields?: Record<string, string>;
   ipAddress?: string;
   userAgent?: string;
@@ -34,11 +34,11 @@ export interface InitiatePaymentRequest {
 
 export interface InitiatePaymentResponse {
   /** REDIRECT = simple `window.location.href = url`.
-   *  FORM_POST = auto-submit a hidden form (Eazypay quirk on some browsers). */
+   *  FORM_POST = auto-submit a hidden form. */
   method: 'REDIRECT' | 'FORM_POST';
   redirectUrl: string;
   formFields?: Record<string, string>; // only for FORM_POST
-  /** Provider's session/order id (e.g. Eazypay refNo, PhonePe orderId). */
+  /** Provider's session/order id (e.g. Orange PG tranCtx, PhonePe orderId). */
   sessionId: string;
   expiresAt: Date;
 }
@@ -47,7 +47,7 @@ export interface InitiatePaymentResponse {
 
 export interface VerifyPaymentRequest {
   paymentTransactionCode: string;
-  /** The opaque payload posted to our return URL — Eazypay form fields,
+  /** The opaque payload posted to our return URL — gateway form fields,
    *  PhonePe redirect query string, etc. */
   rawPayload: Record<string, unknown>;
 }

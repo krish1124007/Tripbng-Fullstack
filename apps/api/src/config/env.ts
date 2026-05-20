@@ -26,20 +26,49 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   TOTP_ISSUER: z.string().default('TripBng'),
 
-  // Razorpay — set to real keys in prod. Empty in dev means the Razorpay path is disabled
-  // (manual top-ups still work). The transform coerces empty strings to undefined.
-  RAZORPAY_KEY_ID: z
+  // ICICI Orange PG / Pay Gateway (env fallback only — prod should use PaymentGatewayConfig in DB).
+  // The merchant key is the HMAC secret — NEVER log it. Aggregator ID is mandatory for us.
+  ICICI_ORANGE_PG_ENV: z.enum(['UAT', 'PROD']).default('UAT'),
+  ICICI_ORANGE_PG_MERCHANT_ID: z
     .string()
     .optional()
     .transform((v) => (v ? v : undefined)),
-  RAZORPAY_KEY_SECRET: z
+  ICICI_ORANGE_PG_AGGREGATOR_ID: z
     .string()
     .optional()
     .transform((v) => (v ? v : undefined)),
-  RAZORPAY_WEBHOOK_SECRET: z
+  ICICI_ORANGE_PG_KEY: z
     .string()
     .optional()
     .transform((v) => (v ? v : undefined)),
+  ICICI_ORANGE_PG_RETURN_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v ? v : undefined)),
+  ICICI_ORANGE_PG_ADVICE_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v ? v : undefined)),
+  ICICI_ORANGE_PG_INITIATE_SALE_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/v2/initiateSale'),
+  ICICI_ORANGE_PG_COMMAND_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/command'),
+  ICICI_ORANGE_PG_SETTLEMENT_DETAILS_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/settlementDetails'),
+  ICICI_ORANGE_PG_USER_CANCEL_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/userCancel'),
 
   // ASEGO travel insurance. Empty toggles the insurance module off (the routes still
   // mount but will return SERVICE_UNAVAILABLE). Once credentials land, set ASEGO_ENABLED=true

@@ -32,15 +32,10 @@ const TopupRequestSchema = new Schema(
     referenceNumber: { type: String, default: null },
     proofUrl: { type: String, default: null },
 
-    // Razorpay bookkeeping.
-    razorpayOrderId: { type: String, default: null, index: true },
-    razorpayPaymentId: { type: String, default: null },
-    razorpaySignature: { type: String, default: null },
-
     // Set on approval — link to the ledger entry we just posted.
     walletTxnId: { type: Schema.Types.ObjectId, ref: 'WalletTransaction', default: null },
 
-    // Idempotency for the verify path (Razorpay can fire client + webhook).
+    // Set when the topup reaches a terminal state (APPROVED / REJECTED).
     settledAt: { type: Date, default: null },
   },
   { timestamps: true },

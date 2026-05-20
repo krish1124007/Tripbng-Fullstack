@@ -4,7 +4,7 @@
 // Phase 2 (✓): search (LowFareSearch) + airPricing (FCheck)
 // Phase 3 (✓): GetSSRs + GetSeatMap — SSR catalog + seat layout
 // Phase 4 (✓): hold (CreatePnr issueTicket=true) + ticket + retrieveBooking
-// Phase 5 (✗): cancel + ticket-poll worker + Razorpay wiring
+// Phase 5 (✗): cancel + ticket-poll worker + payment-gateway wiring
 //
 // Search → Pricing → SSR/SeatMap handoff:
 //   - search() persists the full Kafila response.data into

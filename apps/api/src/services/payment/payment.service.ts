@@ -32,7 +32,7 @@ export interface InitiateTopupInput {
   walletId: Types.ObjectId;
   tenantId: Types.ObjectId;
   amount: number;
-  providerCode: 'ICICI_EAZYPAY' | 'PHONEPE' | 'RAZORPAY';
+  providerCode: 'ICICI_ORANGE_PG' | 'PHONEPE';
   initiatedByUserId: Types.ObjectId;
   agencyId?: Types.ObjectId | null;
   agencyName?: string;

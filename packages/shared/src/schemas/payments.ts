@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 // Payment + wallet Zod contracts. Single source of truth for API + Web.
 
-export const PAYMENT_PROVIDER = ['ICICI_EAZYPAY', 'PHONEPE', 'MANUAL'] as const;
+export const PAYMENT_PROVIDER = ['ICICI_ORANGE_PG', 'PHONEPE', 'MANUAL'] as const;
 export type PaymentProvider = (typeof PAYMENT_PROVIDER)[number];
 
 /** Gateway-side status (ours). Exported as PAYMENT_TXN_STATUS to avoid colliding
@@ -33,7 +33,7 @@ export const PAYMENT_INSTRUMENT = [
 ] as const;
 
 export const TOPUP_METHOD = [
-  'ICICI_EAZYPAY',
+  'ICICI_ORANGE_PG',
   'PHONEPE',
   'MANUAL_NEFT',
   'MANUAL_UPI',
@@ -52,7 +52,7 @@ const amountPaise = z
 
 export const GatewayInitiateTopupRequestSchema = z.object({
   amount: amountPaise,
-  providerCode: z.enum(['ICICI_EAZYPAY', 'PHONEPE']),
+  providerCode: z.enum(['ICICI_ORANGE_PG', 'PHONEPE']),
   /** Optional override: target a specific wallet (admin only — server enforces). */
   walletId: z.string().regex(/^[a-fA-F0-9]{24}$/).optional(),
   /** Optional booking id — when supplied, the gateway webhook worker
@@ -141,7 +141,7 @@ export const GatewayInitiateTopupResponseSchema = z.object({
   txnCode: z.string(),
   redirectUrl: z.string(),
   expiresAt: z.string().datetime(),
-  /** When the gateway returns a form-post URL (Eazypay), the frontend can
+  /** When the gateway returns a form-post URL, the frontend can
    *  either redirect via window.location.href, or auto-submit a hidden form
    *  to handle browsers that block POST navigations. */
   method: z.enum(['REDIRECT', 'FORM_POST']),

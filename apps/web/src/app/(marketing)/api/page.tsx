@@ -25,7 +25,7 @@ const ENDPOINTS = [
   { method: 'POST', path: '/api/v1/bookings/ticket', desc: 'Ticket a held PNR. Returns ticket numbers + e-ticket URL.', group: 'Booking' },
   { method: 'POST', path: '/api/v1/bookings/:id/cancel', desc: 'Cancel a booking. Refund posts atomically to the wallet.', group: 'Booking' },
   { method: 'GET', path: '/api/v1/wallet/me', desc: 'Real-time wallet balance, credit limit, last 5 transactions.', group: 'Wallet' },
-  { method: 'POST', path: '/api/v1/wallet/topups', desc: 'Initiate a UPI / NEFT top-up via Razorpay.', group: 'Wallet' },
+  { method: 'POST', path: '/api/v1/wallet/topups', desc: 'Initiate a UPI / NEFT / bank-transfer top-up.', group: 'Wallet' },
   { method: 'GET', path: '/api/v1/reports/gstr-1', desc: 'Download a month\'s GSTR-1 ready JSON / CSV.', group: 'Reports' },
 ];
 

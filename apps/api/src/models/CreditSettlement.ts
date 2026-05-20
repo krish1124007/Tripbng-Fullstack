@@ -36,7 +36,7 @@ const CreditSettlementSchema = new Schema(
     pgReferenceId: { type: String, required: true },
     pgGateway: {
       type: String,
-      enum: ['ICICI_EAZYPAY', 'PHONEPE', 'RAZORPAY', 'MANUAL'],
+      enum: ['ICICI_ORANGE_PG', 'PHONEPE', 'MANUAL'],
       required: true,
     },
 

@@ -8,7 +8,6 @@ import {
   RejectTopupRequestSchema,
   StatementQuerySchema,
   TransferRequestSchema,
-  VerifyRazorpayTopupRequestSchema,
   WalletQuerySchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
@@ -26,7 +25,6 @@ import {
   initiateTopup,
   rejectTopup,
   serializeTopup,
-  verifyRazorpayTopup,
   type ActorContext,
 } from '../services/wallet/topup.js';
 import { distributorTransferToAgency } from '../services/wallet/transfer.js';
@@ -169,7 +167,8 @@ walletRouter.get('/transactions', validate(WalletQuerySchema, 'query'), async (r
   }
 });
 
-// POST /wallet/topup — initiate (RAZORPAY returns order; manual returns PENDING)
+// POST /wallet/topup — initiate a manual (BANK/UPI/CASH) top-up.
+// Gateway top-ups (PhonePe / ICICI Orange PG) go through POST /api/v1/payments/topups/initiate.
 walletRouter.post(
   '/topup',
   requirePermission('wallet:topup:request'),
@@ -188,26 +187,6 @@ walletRouter.post(
         after: { mode: input.paymentMode, amountPaise: input.amountPaise },
       });
       return ok(res, response, undefined, 201);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-walletRouter.post(
-  '/topup/verify-razorpay',
-  validate(VerifyRazorpayTopupRequestSchema),
-  async (req, res, next) => {
-    try {
-      const input = req.body as ReturnType<typeof VerifyRazorpayTopupRequestSchema.parse>;
-      const t = await verifyRazorpayTopup(
-        actorFromReq(req),
-        input.topupId,
-        input.razorpayPaymentId,
-        input.razorpayOrderId,
-        input.razorpaySignature,
-      );
-      return ok(res, await serializeTopup(t));
     } catch (err) {
       next(err);
     }

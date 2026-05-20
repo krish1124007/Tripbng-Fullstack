@@ -195,14 +195,14 @@ export function AgencyDashboard() {
             href="/flights"
             icon={PlaneTakeoff}
             title="Search & book flights"
-            desc="Series, LCC, FSC — one ranked list, one Cheapest/Fastest/Best ribbon."
+            desc="Compare fares across airlines and suppliers, all on a single screen."
             primary
           />
           <QuickAction
             href="/topups"
             icon={ArrowDownToLine}
             title="Add money"
-            desc="Razorpay UPI, NEFT, or credit. Instant credit on success."
+            desc="Bank transfer or NEFT — upload your payment proof, we'll credit in minutes."
           />
           <QuickAction
             href="/amendments"

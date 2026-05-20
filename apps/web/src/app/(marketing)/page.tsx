@@ -298,7 +298,7 @@ function Why() {
 const FLOW = [
   { icon: PlaneTakeoff, label: 'Search', desc: 'Series + LCC + FSC, one list.' },
   { icon: Clock, label: 'Hold', desc: 'Lock the fare for 30 minutes.' },
-  { icon: CreditCard, label: 'Pay', desc: 'Wallet debit or Razorpay UPI.' },
+  { icon: CreditCard, label: 'Pay', desc: 'Wallet debit or gateway UPI.' },
   { icon: Send, label: 'Ticket', desc: 'PNR + e-ticket within seconds.' },
   { icon: Receipt, label: 'Invoice', desc: 'GST-clean, accountant-ready.' },
   { icon: CircleDollarSign, label: 'Settle', desc: 'Reconciled the same day.' },

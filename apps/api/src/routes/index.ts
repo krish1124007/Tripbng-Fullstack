@@ -72,7 +72,7 @@ apiRouter.use('/bus', busRouter);
 // /insurance/quote shadows the legacy mock placeholder in productsRouter.
 apiRouter.use('/insurance', insuranceRouter);
 
-// Payment gateways — ICICI Eazypay + PhonePe + manual top-ups + wallet ops.
+// Payment gateways — ICICI Orange PG + PhonePe + manual top-ups + wallet ops.
 // Webhook + return URLs sit BEFORE auth middleware (handled inside the router).
 apiRouter.use('/payments', paymentsRouter);
 

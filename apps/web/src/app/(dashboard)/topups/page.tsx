@@ -113,7 +113,7 @@ export default function TopupsPage() {
         accessorKey: 'referenceNumber',
         cell: ({ row }) => (
           <span className="font-mono text-xs text-ink-3">
-            {row.original.referenceNumber ?? row.original.razorpayPaymentId ?? '—'}
+            {row.original.referenceNumber ?? '—'}
           </span>
         ),
       },
@@ -194,7 +194,7 @@ export default function TopupsPage() {
         description={
           isAdmin
             ? 'Manual top-ups awaiting verification. Approving posts an immutable ledger credit.'
-            : 'Your past top-up requests. Razorpay clears instantly; manual modes wait on admin.'
+            : 'Your past top-up requests. Gateway top-ups clear instantly; manual modes wait on admin.'
         }
       />
 

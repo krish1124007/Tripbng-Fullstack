@@ -1,7 +1,7 @@
 'use client';
 
-// Payment return page — the destination ICICI Eazypay / PhonePe redirect to
-// after the customer completes payment.
+// Payment return page — the destination payment gateways (PhonePe, etc.)
+// redirect to after the customer completes payment.
 //
 // Flow:
 //   1. We receive `?txnCode=...` in the URL
@@ -47,7 +47,7 @@ interface TxnStatusResponse {
   txnCode: string;
   status: TxnStatus;
   amount: number;
-  providerCode: 'ICICI_EAZYPAY' | 'PHONEPE';
+  providerCode: 'ICICI_ORANGE_PG' | 'PHONEPE';
   paymentInstrument?: string | null;
 }
 
@@ -332,7 +332,7 @@ function subline(
 }
 
 function providerLabel(providerCode: string): string {
-  if (providerCode === 'ICICI_EAZYPAY') return 'ICICI Eazypay';
+  if (providerCode === 'ICICI_ORANGE_PG') return 'ICICI Bank';
   if (providerCode === 'PHONEPE') return 'PhonePe';
   return providerCode;
 }

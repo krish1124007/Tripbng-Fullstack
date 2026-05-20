@@ -11,20 +11,16 @@
 // environments keep working before any admin row exists. Production should
 // never rely on env fallback — there's a metric we expose for ops.
 
+import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { getActiveConfig } from '../../services/payment/payment-config.service.js';
-import {
-  IciciEazypayProvider,
-  type IciciEazypayConfig,
-  type IciciEazypayCredentials,
-} from './icici-eazypay.provider.js';
+import { IciciOrangePgProvider } from './icici-orange-pg/index.js';
+import type {
+  IciciOrangePgConfig,
+  IciciOrangePgCredentials,
+} from './icici-orange-pg/types.js';
 import { ManualProvider } from './manual.provider.js';
 import { PhonePeProvider, type PhonePeConfig, type PhonePeCredentials } from './phonepe.provider.js';
-import {
-  RazorpayProvider,
-  type RazorpayConfig,
-  type RazorpayCredentials,
-} from './razorpay.provider.js';
 import {
   PaymentError,
   type PaymentProvider,
@@ -63,15 +59,15 @@ export interface GetProviderOptions {
  * fallback isn't usable.
  */
 export async function getProvider(opts: GetProviderOptions): Promise<PaymentProvider> {
-  const env = opts.environment ?? (process.env.NODE_ENV === 'production' ? 'PROD' : 'UAT');
+  const envName = opts.environment ?? (process.env.NODE_ENV === 'production' ? 'PROD' : 'UAT');
   if (opts.providerCode === 'MANUAL') return manualSingleton;
 
-  const key = cacheKey(opts.tenantId, opts.providerCode, env);
+  const key = cacheKey(opts.tenantId, opts.providerCode, envName);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.hydratedAt < TEN_MIN) return hit.provider;
 
   // DB-first — credentials decrypted via the config service.
-  const active = await getActiveConfig(opts.tenantId, opts.providerCode, env);
+  const active = await getActiveConfig(opts.tenantId, opts.providerCode, envName);
   if (active) {
     const provider = buildProvider({
       _id: active.configId,
@@ -86,10 +82,10 @@ export async function getProvider(opts: GetProviderOptions): Promise<PaymentProv
   }
 
   // Env fallback (dev only).
-  const fallback = buildProviderFromEnv(opts.providerCode, env);
+  const fallback = buildProviderFromEnv(opts.providerCode, envName);
   if (fallback) {
     logger.warn(
-      { providerCode: opts.providerCode, env },
+      { providerCode: opts.providerCode, envName },
       'using env-fallback gateway config — production should use PaymentGatewayConfig in DB',
     );
     return fallback;
@@ -97,7 +93,7 @@ export async function getProvider(opts: GetProviderOptions): Promise<PaymentProv
 
   throw new PaymentError(
     'NOT_CONFIGURED',
-    `No active ${opts.providerCode} config for tenant ${opts.tenantId} (${env})`,
+    `No active ${opts.providerCode} config for tenant ${opts.tenantId} (${envName})`,
     opts.providerCode,
   );
 }
@@ -119,22 +115,45 @@ interface BuildInput {
 
 function buildProvider(raw: BuildInput): PaymentProvider {
   const timeoutMs = raw.timeoutMs ?? 30_000;
-  if (raw.providerCode === 'ICICI_EAZYPAY') {
-    const creds = raw.credentials as Partial<IciciEazypayCredentials>;
-    if (!creds.merchantId || !creds.subMerchantId || !creds.encryptionKey || !creds.payMode) {
+  if (raw.providerCode === 'ICICI_ORANGE_PG') {
+    const creds = raw.credentials as Partial<IciciOrangePgCredentials> & {
+      adviceURL?: string;
+      initiateSaleUrl?: string;
+      commandUrl?: string;
+      settlementDetailsUrl?: string;
+      userCancelUrl?: string;
+    };
+    if (!creds.merchantId || !creds.aggregatorID || !creds.key) {
       throw new PaymentError(
         'NOT_CONFIGURED',
-        'ICICI Eazypay credentials incomplete',
-        'ICICI_EAZYPAY',
+        'ICICI Orange PG credentials incomplete (merchantId/aggregatorID/key)',
+        'ICICI_ORANGE_PG',
       );
     }
-    const cfg: IciciEazypayConfig = {
-      credentials: creds as IciciEazypayCredentials,
-      baseUrl: raw.baseUrl,
-      returnUrl: raw.returnUrl ?? '',
+    const cfg: IciciOrangePgConfig = {
+      credentials: {
+        merchantId: creds.merchantId,
+        aggregatorID: creds.aggregatorID,
+        key: creds.key,
+      },
+      endpoints: {
+        initiateSale: creds.initiateSaleUrl ?? env.ICICI_ORANGE_PG_INITIATE_SALE_URL,
+        command: creds.commandUrl ?? env.ICICI_ORANGE_PG_COMMAND_URL,
+        settlementDetails: creds.settlementDetailsUrl ?? env.ICICI_ORANGE_PG_SETTLEMENT_DETAILS_URL,
+        userCancel: creds.userCancelUrl ?? env.ICICI_ORANGE_PG_USER_CANCEL_URL,
+      },
+      returnURL: raw.returnUrl ?? env.ICICI_ORANGE_PG_RETURN_URL ?? '',
+      adviceURL: creds.adviceURL ?? env.ICICI_ORANGE_PG_ADVICE_URL ?? '',
       timeoutMs,
     };
-    return new IciciEazypayProvider(cfg);
+    if (!cfg.returnURL) {
+      throw new PaymentError(
+        'NOT_CONFIGURED',
+        'ICICI Orange PG returnURL not set on config or ICICI_ORANGE_PG_RETURN_URL env',
+        'ICICI_ORANGE_PG',
+      );
+    }
+    return new IciciOrangePgProvider(cfg);
   }
   if (raw.providerCode === 'PHONEPE') {
     const creds = raw.credentials as Partial<PhonePeCredentials>;
@@ -149,42 +168,29 @@ function buildProvider(raw: BuildInput): PaymentProvider {
     };
     return new PhonePeProvider(cfg);
   }
-  if (raw.providerCode === 'RAZORPAY') {
-    const creds = raw.credentials as Partial<RazorpayCredentials>;
-    if (!creds.keyId || !creds.keySecret || !creds.webhookSecret) {
-      throw new PaymentError('NOT_CONFIGURED', 'Razorpay credentials incomplete', 'RAZORPAY');
-    }
-    const cfg: RazorpayConfig = {
-      credentials: creds as RazorpayCredentials,
-      baseUrl: raw.baseUrl,
-      returnUrl: raw.returnUrl ?? '',
-      timeoutMs,
-    };
-    return new RazorpayProvider(cfg);
-  }
   throw new PaymentError('NOT_CONFIGURED', `Unknown provider ${raw.providerCode}`);
 }
 
 function buildProviderFromEnv(
   code: PaymentProviderCode,
-  env: 'UAT' | 'PROD',
+  _envName: 'UAT' | 'PROD',
 ): PaymentProvider | null {
-  if (code === 'ICICI_EAZYPAY') {
-    const merchantId = process.env.EAZYPAY_MERCHANT_ID;
-    const subMerchantId = process.env.EAZYPAY_SUB_MERCHANT_ID;
-    const encryptionKey = process.env.EAZYPAY_ENCRYPTION_KEY;
-    const payMode = process.env.EAZYPAY_PAYMODE;
-    const baseUrl =
-      process.env.EAZYPAY_BASE_URL ??
-      (env === 'PROD'
-        ? 'https://eazypay.icicibank.com/EazyPG'
-        : 'https://eazypayuat.icicibank.com/EazyPG');
-    const returnUrl = process.env.EAZYPAY_RETURN_URL;
-    if (!merchantId || !subMerchantId || !encryptionKey || !payMode || !returnUrl) return null;
-    return new IciciEazypayProvider({
-      credentials: { merchantId, subMerchantId, encryptionKey, payMode },
-      baseUrl,
-      returnUrl,
+  if (code === 'ICICI_ORANGE_PG') {
+    const merchantId = env.ICICI_ORANGE_PG_MERCHANT_ID;
+    const aggregatorID = env.ICICI_ORANGE_PG_AGGREGATOR_ID;
+    const key = env.ICICI_ORANGE_PG_KEY;
+    const returnURL = env.ICICI_ORANGE_PG_RETURN_URL;
+    if (!merchantId || !aggregatorID || !key || !returnURL) return null;
+    return new IciciOrangePgProvider({
+      credentials: { merchantId, aggregatorID, key },
+      endpoints: {
+        initiateSale: env.ICICI_ORANGE_PG_INITIATE_SALE_URL,
+        command: env.ICICI_ORANGE_PG_COMMAND_URL,
+        settlementDetails: env.ICICI_ORANGE_PG_SETTLEMENT_DETAILS_URL,
+        userCancel: env.ICICI_ORANGE_PG_USER_CANCEL_URL,
+      },
+      returnURL,
+      adviceURL: env.ICICI_ORANGE_PG_ADVICE_URL ?? '',
       timeoutMs: 30_000,
     });
   }
@@ -197,7 +203,7 @@ function buildProviderFromEnv(
     const webhookPassword = process.env.PHONEPE_WEBHOOK_PASSWORD;
     const baseUrl =
       process.env.PHONEPE_BASE_URL ??
-      (env === 'PROD'
+      (_envName === 'PROD'
         ? 'https://api.phonepe.com/apis/pg'
         : 'https://api-preprod.phonepe.com/apis/pg-sandbox');
     const returnUrl = process.env.PHONEPE_RETURN_URL;
@@ -219,25 +225,6 @@ function buildProviderFromEnv(
         webhookUsername,
         webhookPassword,
       },
-      baseUrl,
-      returnUrl,
-      timeoutMs: 30_000,
-    });
-  }
-  if (code === 'RAZORPAY') {
-    // env keys are RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET /
-    // RAZORPAY_WEBHOOK_SECRET (already declared in config/env.ts).
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    // Same host for sandbox + prod — only the keys differ. Default
-    // to the public API host and let an override exist for testing
-    // against razorpay-mocks if anyone ever needs it.
-    const baseUrl = process.env.RAZORPAY_BASE_URL ?? 'https://api.razorpay.com';
-    const returnUrl = process.env.RAZORPAY_RETURN_URL;
-    if (!keyId || !keySecret || !webhookSecret || !returnUrl) return null;
-    return new RazorpayProvider({
-      credentials: { keyId, keySecret, webhookSecret },
       baseUrl,
       returnUrl,
       timeoutMs: 30_000,

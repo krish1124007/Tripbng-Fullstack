@@ -126,7 +126,7 @@ describe('WaterfallService.applyPayment', () => {
       agencyId: String(agencyId),
       amountPaise: 100_000,
       pgReferenceId: ref,
-      pgGateway: 'ICICI_EAZYPAY',
+      pgGateway: 'ICICI_ORANGE_PG',
       performedBy: String(userId),
     });
     expect(res.applied).toBe(true);
@@ -172,7 +172,7 @@ describe('WaterfallService.applyPayment', () => {
       agencyId: String(agencyId),
       amountPaise: 150_000,
       pgReferenceId: ref,
-      pgGateway: 'ICICI_EAZYPAY',
+      pgGateway: 'ICICI_ORANGE_PG',
       performedBy: String(userId),
     });
 
@@ -305,7 +305,7 @@ describe('WaterfallService.applyPayment', () => {
       agencyId: String(agencyId),
       amountPaise: 60_000,
       pgReferenceId: ref,
-      pgGateway: 'ICICI_EAZYPAY',
+      pgGateway: 'ICICI_ORANGE_PG',
       performedBy: String(userId),
     });
     // 40k credit owed + 60k deposit → settle 40k, wallet leg = 20k.

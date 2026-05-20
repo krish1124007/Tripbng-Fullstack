@@ -37,17 +37,17 @@ export function createApp(): Express {
 
   app.use(
     helmet({
-      // Production CSP — locks scripts to self + Razorpay checkout. Dev mode keeps it
-      // permissive so Next dev tooling can hot-reload without yelling.
+      // Production CSP — locks scripts to self. Dev mode keeps it permissive so
+      // Next dev tooling can hot-reload without yelling.
       contentSecurityPolicy: isProd
         ? {
             directives: {
               defaultSrc: ["'self'"],
-              scriptSrc: ["'self'", 'https://checkout.razorpay.com'],
+              scriptSrc: ["'self'"],
               styleSrc: ["'self'", "'unsafe-inline'"],
               imgSrc: ["'self'", 'data:', 'https:'],
-              connectSrc: ["'self'", 'https://api.razorpay.com'],
-              frameSrc: ["'self'", 'https://api.razorpay.com'],
+              connectSrc: ["'self'"],
+              frameSrc: ["'self'"],
               objectSrc: ["'none'"],
               upgradeInsecureRequests: [],
             },

@@ -5,10 +5,9 @@
 // Opens after a successful /bookings/hold call. Lets the agent pick
 // how to settle the ticket:
 //
-//   • Wallet         — instant if balance ≥ totalToPay → confirm → ticket
-//   • ICICI Eazypay  — redirect to ICICI's PG, on return we top up the
-//                       wallet and auto-confirm
-//   • PhonePe        — same redirect pattern, different provider
+//   • Wallet   — instant if balance ≥ totalToPay → confirm → ticket
+//   • PhonePe  — redirect to PhonePe, on return we top up the wallet
+//                and auto-confirm the booking
 //
 // Gateway flow uses the existing /api/v1/payments/topups/initiate +
 // /api/v1/bookings/confirm endpoints — no new backend needed. We
@@ -44,7 +43,7 @@ import { useAuthStore } from '@/lib/auth-store';
 import { formatPaiseAsINR } from '@/lib/money';
 import { cn } from '@/lib/utils';
 
-type ProviderCode = 'ICICI_EAZYPAY' | 'PHONEPE';
+type ProviderCode = 'PHONEPE';
 
 interface InitiateTopupResponse {
   paymentTxnId: string;
@@ -154,8 +153,8 @@ export function PaymentMethodDialog({
         return;
       }
 
-      // POST redirect — build a self-submitting form. ICICI Eazypay
-      // expects encrypted fields posted to the bank URL.
+      // POST redirect — build a self-submitting form for providers
+      // that require form-encoded posts to the gateway URL.
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = init.redirectUrl;
@@ -230,19 +229,6 @@ export function PaymentMethodDialog({
             }
             onClick={payFromWallet}
             cta={walletCovers ? 'Pay & ticket' : creditCovers ? 'Pay via credit' : 'Top up needed'}
-          />
-
-          {/* ICICI Eazypay card */}
-          <PaymentMethodCard
-            icon={CreditCard}
-            tone="info"
-            title="Pay via ICICI Eazypay"
-            subtitle="Net banking · UPI · Card — settles to your wallet first"
-            disabled={busy !== null}
-            busy={busy === 'ICICI_EAZYPAY'}
-            badge={{ label: 'Redirect to bank', tone: 'neutral' }}
-            onClick={() => payViaGateway('ICICI_EAZYPAY')}
-            cta="Continue to ICICI"
           />
 
           {/* PhonePe card */}

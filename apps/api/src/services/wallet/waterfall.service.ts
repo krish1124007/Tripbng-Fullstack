@@ -47,7 +47,7 @@ import { CODE_PREFIX } from '@tripbng/shared';
 import { enqueueDiIncentive } from '../../queues/di-incentive.worker.js';
 import { getDiIncentiveQueue } from '../../queues/index.js';
 
-export type PgGateway = 'ICICI_EAZYPAY' | 'PHONEPE' | 'RAZORPAY' | 'MANUAL';
+export type PgGateway = 'ICICI_ORANGE_PG' | 'PHONEPE' | 'MANUAL';
 
 export interface ApplyPaymentInput {
   tenantId: string;
