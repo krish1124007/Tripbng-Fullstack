@@ -24,6 +24,11 @@ export const ERROR_CODES = {
   // 409
   EMAIL_TAKEN: { http: 409, message: 'An account with this email already exists' },
   MOBILE_TAKEN: { http: 409, message: 'An account with this mobile already exists' },
+  /** Mongo E11000 duplicate-key on any other unique index — the error
+   *  middleware surfaces this when the colliding field isn't email/mobile.
+   *  details.field carries the column name; details.keyValue carries the
+   *  offending value. */
+  DUPLICATE_KEY: { http: 409, message: 'Resource already exists' },
   IDEMPOTENCY_CONFLICT: { http: 409, message: 'Duplicate request' },
   TOTP_ALREADY_ENABLED: { http: 409, message: '2FA is already enrolled for this account' },
 
