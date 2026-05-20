@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
@@ -29,7 +29,18 @@ import { apiFetch, ApiCallError } from '@/lib/api';
 
 type Step = 'credentials' | 'scan' | 'done';
 
+// Next 14 prerenders pages by default. Anything that calls useSearchParams must
+// sit inside a <Suspense> boundary or the static build bails out. We wrap the
+// real page component below.
 export default function SetupTwoFactorPage() {
+  return (
+    <Suspense fallback={null}>
+      <SetupTwoFactorPageInner />
+    </Suspense>
+  );
+}
+
+function SetupTwoFactorPageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const prefilledEmail = params.get('email') ?? '';
