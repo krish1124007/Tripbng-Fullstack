@@ -24,6 +24,13 @@ import {
   rejectTransfer,
 } from '../services/wallet/distributor-transfer.service.js';
 import { DistributorTransfer } from '../models/DistributorTransfer.js';
+import { PendingAdjustment } from '../models/PendingAdjustment.js';
+import {
+  approveAdjustment,
+  cancelAdjustment,
+  proposeAdjustment,
+  rejectAdjustment,
+} from '../services/wallet/adjust-approval.service.js';
 
 export const adminAgencyRouter: RouterT = Router();
 
@@ -233,6 +240,186 @@ const RejectTransferBodySchema = z.object({
 
 const RecallTransferBodySchema = z.object({
   notes: z.string().max(500).optional().nullable(),
+});
+
+// ── Manual wallet adjustments — two-person approval (spec §7) ──
+const ProposeAdjustmentBodySchema = z
+  .object({
+    direction: z.enum(['CREDIT', 'DEBIT']),
+    amountPaise: z.number().int().positive(),
+    reason: z.string().min(3).max(1000),
+    agencyId: z.string().regex(/^[a-fA-F0-9]{24}$/).optional().nullable(),
+    distributorId: z
+      .string()
+      .regex(/^[a-fA-F0-9]{24}$/)
+      .optional()
+      .nullable(),
+  })
+  .refine(
+    (d) => Boolean(d.agencyId) !== Boolean(d.distributorId),
+    { message: 'exactly one of agencyId or distributorId required' },
+  );
+
+const RejectAdjustmentBodySchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+
+const ListAdjustmentsQuerySchema = z.object({
+  status: z.enum(['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'CANCELLED']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/adjustments — propose a manual wallet adjustment. Below
+// threshold executes immediately; above stages for two-person approval.
+// ─────────────────────────────────────────────────────────────────────────────
+
+adminAgencyRouter.post(
+  '/adjustments',
+  validate(ProposeAdjustmentBodySchema),
+  async (req, res, next) => {
+    try {
+      const body = req.body as ReturnType<typeof ProposeAdjustmentBodySchema.parse>;
+      const result = await proposeAdjustment(
+        {
+          tenantId: req.auth!.tenantId,
+          userId: req.auth!.userId,
+          role: req.auth!.role,
+          ipAddress: req.ip ?? null,
+        },
+        {
+          direction: body.direction,
+          amountPaise: body.amountPaise,
+          reason: body.reason,
+          ...(body.agencyId ? { agencyId: body.agencyId } : {}),
+          ...(body.distributorId ? { distributorId: body.distributorId } : {}),
+        },
+      );
+      return ok(res, result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/adjustments — list pending / approved / rejected adjustments
+// ─────────────────────────────────────────────────────────────────────────────
+
+adminAgencyRouter.get(
+  '/adjustments',
+  validate(ListAdjustmentsQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const query = req.query as unknown as ReturnType<typeof ListAdjustmentsQuerySchema.parse>;
+      const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
+      if (query.status) filter.status = query.status;
+      const rows = await PendingAdjustment.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(query.limit)
+        .lean();
+      return ok(res, {
+        items: rows.map((r) => ({
+          id: String(r._id),
+          agencyId: r.agencyId ? String(r.agencyId) : null,
+          distributorId: r.distributorId ? String(r.distributorId) : null,
+          direction: r.direction,
+          amountPaise: r.amountPaise,
+          reason: r.reason,
+          status: r.status,
+          proposedBy: String(r.proposedBy),
+          proposedAt: r.proposedAt,
+          approvedBy: r.approvedBy ? String(r.approvedBy) : null,
+          approvedAt: r.approvedAt,
+          rejectionReason: r.rejectionReason,
+          ledgerTxnId: r.ledgerTxnId ? String(r.ledgerTxnId) : null,
+        })),
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/adjustments/:id/approve — second admin approves + executes
+// ─────────────────────────────────────────────────────────────────────────────
+
+adminAgencyRouter.post('/adjustments/:id/approve', async (req, res, next) => {
+  try {
+    const pending = await approveAdjustment(
+      {
+        tenantId: req.auth!.tenantId,
+        userId: req.auth!.userId,
+        role: req.auth!.role,
+        ipAddress: req.ip ?? null,
+      },
+      req.params.id!,
+    );
+    return ok(res, {
+      id: String(pending._id),
+      status: pending.status,
+      ledgerTxnId: pending.ledgerTxnId ? String(pending.ledgerTxnId) : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/adjustments/:id/reject — second admin rejects
+// ─────────────────────────────────────────────────────────────────────────────
+
+adminAgencyRouter.post(
+  '/adjustments/:id/reject',
+  validate(RejectAdjustmentBodySchema),
+  async (req, res, next) => {
+    try {
+      const { reason } = req.body as ReturnType<typeof RejectAdjustmentBodySchema.parse>;
+      const pending = await rejectAdjustment(
+        {
+          tenantId: req.auth!.tenantId,
+          userId: req.auth!.userId,
+          role: req.auth!.role,
+          ipAddress: req.ip ?? null,
+        },
+        req.params.id!,
+        reason,
+      );
+      return ok(res, {
+        id: String(pending._id),
+        status: pending.status,
+        rejectionReason: pending.rejectionReason,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/adjustments/:id/cancel — proposer withdraws their own request
+// ─────────────────────────────────────────────────────────────────────────────
+
+adminAgencyRouter.post('/adjustments/:id/cancel', async (req, res, next) => {
+  try {
+    const pending = await cancelAdjustment(
+      {
+        tenantId: req.auth!.tenantId,
+        userId: req.auth!.userId,
+        role: req.auth!.role,
+        ipAddress: req.ip ?? null,
+      },
+      req.params.id!,
+    );
+    return ok(res, {
+      id: String(pending._id),
+      status: pending.status,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 adminAgencyRouter.post(

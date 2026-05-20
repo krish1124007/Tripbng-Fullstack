@@ -159,6 +159,16 @@ const EnvSchema = z.object({
     .nonnegative()
     .default(5_000_000),
 
+  /** Manual wallet adjustments (admin-posted CREDIT / DEBIT) above this
+   *  threshold require two-person approval per spec §7. Default ₹10,000
+   *  = 1,000,000 paise. The approver MUST be a different SUPER_ADMIN than
+   *  the proposer — the service rejects same-user approvals. */
+  WALLET_ADJUSTMENT_APPROVAL_THRESHOLD_PAISE: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(1_000_000),
+
   /** Shared-secret authorisation for /internal/* endpoints (booking engine
    *  → wallet, etc.). When set, calls MUST include the same value in the
    *  `X-Internal-Key` header. Unset = endpoints reject every request (safe
