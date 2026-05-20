@@ -29,6 +29,7 @@ import { cn } from '@/lib/utils';
 import { findHotelInCache } from '@/lib/hotel-cache';
 import { useCart } from '@/lib/cart';
 import { formatDateShort, nightsBetween } from '@/components/hotels/utils';
+import { BookAndPayDialog } from './_book-and-pay-dialog';
 
 /**
  * /hotels/[id] — hotel detail page. Reads the hotel from session-cached search
@@ -42,6 +43,7 @@ export default function HotelDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? '';
   const addToCart = useCart((s) => s.addItem);
+  const [bookOpen, setBookOpen] = useState(false);
 
   const [data, setData] = useState<{
     hotel: HotelOption;
@@ -401,11 +403,14 @@ export default function HotelDetailPage() {
                     Includes taxes &amp; fees · {h.inclusion}
                   </p>
                 </div>
-                <Button onClick={onBook} className="w-full">
-                  Add to itinerary <ArrowRight className="h-4 w-4" />
+                <Button onClick={() => setBookOpen(true)} className="w-full">
+                  Book &amp; pay {formatRupees(h.totalPaise / 100)} <ArrowRight className="h-4 w-4" />
+                </Button>
+                <Button onClick={onBook} variant="secondary" className="w-full">
+                  Add to itinerary
                 </Button>
                 <p className="flex items-center justify-center gap-1 text-[10px] text-ink-3">
-                  <CheckCircle2 className="h-3 w-3 text-success" /> Re-priced through your policy chain
+                  <CheckCircle2 className="h-3 w-3 text-success" /> Wallet debit on confirm · refundable rates safe
                 </p>
               </CardContent>
             </Card>
@@ -423,11 +428,29 @@ export default function HotelDetailPage() {
               <span className="ml-1 text-[10px] font-medium text-ink-3">/ night</span>
             </p>
           </div>
-          <Button onClick={onBook} size="lg" className="flex-1">
-            Add to itinerary
+          <Button onClick={() => setBookOpen(true)} size="lg" className="flex-1">
+            Book &amp; pay
           </Button>
         </div>
       </div>
+
+      <BookAndPayDialog
+        open={bookOpen}
+        onOpenChange={setBookOpen}
+        hotel={{
+          id: h.id,
+          name: h.name,
+          city: h.city,
+          stars: h.stars,
+          perNightPaise: h.perNightPaise,
+          refundable: h.refundable,
+          roomType: h.roomType,
+        }}
+        checkIn={checkIn}
+        checkOut={checkOut}
+        rooms={rooms}
+        nights={nights}
+      />
     </div>
   );
 }
