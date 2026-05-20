@@ -13,6 +13,45 @@ export class ApiCallError extends Error {
   }
 }
 
+/**
+ * Build a human-readable message from an ApiCallError, lifting the
+ * specific failing field(s) out of a Zod VALIDATION_ERROR payload.
+ *
+ * Why: the server formats Zod errors as
+ *   { details: { issues: { formErrors: [...], fieldErrors: { ... } } } }
+ * and the bare `err.message` is just the generic "Invalid input" — useless
+ * to the agent staring at a 6-field booking form. This pulls the first
+ * couple of field issues out so the toast tells them where to look.
+ */
+export function formatApiError(err: unknown): string {
+  if (!(err instanceof ApiCallError)) {
+    return err instanceof Error ? err.message : 'Something went wrong';
+  }
+  if (err.code !== 'VALIDATION_ERROR') return err.message;
+
+  const issues = err.details?.issues as
+    | { formErrors?: string[]; fieldErrors?: Record<string, string[] | undefined> }
+    | undefined;
+  if (!issues) return err.message;
+
+  // Field-level errors first — those tell the agent exactly which input.
+  const fieldEntries = Object.entries(issues.fieldErrors ?? {}).filter(
+    ([, msgs]) => msgs && msgs.length > 0,
+  );
+  if (fieldEntries.length > 0) {
+    const summary = fieldEntries
+      .slice(0, 2)
+      .map(([field, msgs]) => `${field}: ${msgs![0]}`)
+      .join(' · ');
+    const more = fieldEntries.length > 2 ? ` (+${fieldEntries.length - 2} more)` : '';
+    return `${err.message} — ${summary}${more}`;
+  }
+  if (issues.formErrors && issues.formErrors.length > 0) {
+    return `${err.message} — ${issues.formErrors[0]}`;
+  }
+  return err.message;
+}
+
 interface RequestOpts extends Omit<RequestInit, 'body' | 'headers'> {
   body?: unknown;
   headers?: Record<string, string>;
