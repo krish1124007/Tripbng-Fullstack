@@ -22,6 +22,7 @@ export const QUEUE_NAMES = {
   TBO_FLIGHT_CANCEL_POLL: 'tbo-flight-cancel-poll',
   SEATSELLER_CITY_SYNC: 'seatseller-city-sync',
   WALLET_MONITOR: 'wallet-monitor',
+  WALLET_INTEGRITY: 'wallet-integrity',
   APPROVAL_EXPIRY_SWEEPER: 'approval-expiry-sweeper',
   BUS_OPERATOR_CANCELLATION_POLLER: 'bus-operator-cancellation-poller',
   KAFILA_TICKET_POLL: 'kafila-ticket-poll',
@@ -39,6 +40,7 @@ let tboCancelPollQueue: Queue | null = null;
 let tboFlightCancelPollQueue: Queue | null = null;
 let seatsellerCitySyncQueue: Queue | null = null;
 let walletMonitorQueue: Queue | null = null;
+let walletIntegrityQueue: Queue | null = null;
 let approvalExpirySweeperQueue: Queue | null = null;
 let busOperatorCancellationPollerQueue: Queue | null = null;
 let kafilaTicketPollQueue: Queue | null = null;
@@ -135,6 +137,13 @@ export function getWalletMonitorQueue(): Queue {
     walletMonitorQueue = new Queue(QUEUE_NAMES.WALLET_MONITOR, sharedConnection());
   }
   return walletMonitorQueue;
+}
+
+export function getWalletIntegrityQueue(): Queue {
+  if (!walletIntegrityQueue) {
+    walletIntegrityQueue = new Queue(QUEUE_NAMES.WALLET_INTEGRITY, sharedConnection());
+  }
+  return walletIntegrityQueue;
 }
 
 export function getApprovalExpirySweeperQueue(): Queue {
@@ -237,6 +246,9 @@ export async function startWorkers(): Promise<void> {
   );
   const { walletMonitorProcessor, scheduleWalletMonitor } = await import(
     './wallet-monitor.worker.js'
+  );
+  const { walletIntegrityProcessor, scheduleWalletIntegrity } = await import(
+    './wallet-integrity.worker.js'
   );
   const { approvalExpirySweeperProcessor, scheduleApprovalExpirySweeper } = await import(
     './approval-expiry-sweeper.worker.js'
@@ -358,6 +370,16 @@ export async function startWorkers(): Promise<void> {
   );
   workers.push(
     new Worker(
+      QUEUE_NAMES.WALLET_INTEGRITY,
+      walletIntegrityProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — overlapping ticks would race on per-wallet
+      // `lastReconciledAt` writes and duplicate audit rows. Daily cadence
+      // makes serial execution easy.
+      { ...opts, concurrency: 1 },
+    ),
+  );
+  workers.push(
+    new Worker(
       QUEUE_NAMES.APPROVAL_EXPIRY_SWEEPER,
       approvalExpirySweeperProcessor as (job: Job) => Promise<unknown>,
       // Concurrency 1 — single Mongo updateMany; concurrency adds nothing.
@@ -408,6 +430,9 @@ export async function startWorkers(): Promise<void> {
   // Wallet monitor — every 15 min by default.
   await scheduleWalletMonitor(getWalletMonitorQueue());
 
+  // Wallet integrity — daily 02:30 IST. Recomputes ledger sums and audits drift.
+  await scheduleWalletIntegrity(getWalletIntegrityQueue());
+
   // Approval expiry sweeper — every 1 min.
   await scheduleApprovalExpirySweeper(getApprovalExpirySweeperQueue());
 
@@ -434,6 +459,7 @@ export async function stopWorkers(): Promise<void> {
       tboFlightCancelPollQueue,
       seatsellerCitySyncQueue,
       walletMonitorQueue,
+      walletIntegrityQueue,
       approvalExpirySweeperQueue,
       busOperatorCancellationPollerQueue,
       kafilaTicketPollQueue,
@@ -453,6 +479,7 @@ export async function stopWorkers(): Promise<void> {
   seatsellerCitySyncQueue = null;
   tboFlightCancelPollQueue = null;
   walletMonitorQueue = null;
+  walletIntegrityQueue = null;
   approvalExpirySweeperQueue = null;
   busOperatorCancellationPollerQueue = null;
   kafilaTicketPollQueue = null;

@@ -6,7 +6,7 @@ import mongoose, {
   type Model,
   type Types,
 } from 'mongoose';
-import { AGENCY_STATUS } from '@tripbng/shared';
+import { AGENCY_BLOCK_REASON, AGENCY_MODULE, AGENCY_STATUS } from '@tripbng/shared';
 
 const AgencySchema = new Schema(
   {
@@ -39,10 +39,39 @@ const AgencySchema = new Schema(
       deposit: { type: Boolean, default: false },
     },
 
+    // ───────── Agency-wallet module config (Phase-1 step 4) ─────────
+    //
+    // `module` is the mutually-exclusive billing/pricing tier per spec §0.
+    // Default 'CASH' so existing rows are behaviourally unchanged — only
+    // explicit admin assignment switches an agency into CREDIT/DI/etc.
+    // The `paymentMethods` flags above are kept for back-compat with current
+    // booking-flow code; once `module` is fully wired, they'll be derived
+    // from it (see gap-analysis Conflict — paymentMethods consolidation).
+    module: { type: String, enum: AGENCY_MODULE, default: 'CASH', index: true },
+
+    // Sub-agent → distributor parent. Null for everything except module=SUB_AGENT.
+    // We do NOT migrate the existing `distributorId` reference here — both
+    // co-exist during the transition (gap-analysis Conflict 2 deferred).
+    parentAgencyId: { type: Schema.Types.ObjectId, ref: 'Agency', default: null, index: true },
+
+    // Denormalised booking-gate flags. Recomputed by the hourly cron + on every
+    // ledger write so the booking flow can check a single boolean without
+    // re-evaluating credit limits / expiries / due dates inline.
+    bookingBlocked: { type: Boolean, default: false, index: true },
+    blockReason: { type: String, enum: AGENCY_BLOCK_REASON, default: null },
+
+    // Credit-module fields (only meaningful when module='CREDIT'). Null on
+    // any non-credit agency. Spec §6.1 + §3.6.
+    creditExpiryDate: { type: Date, default: null },
+    creditDueDate: { type: Date, default: null, index: true },
+    blockOnDueDateCross: { type: Boolean, default: false },
+
     managementFee: { type: Number, default: 0 },
     manageMarkup: { type: Number, default: 0 },
 
     status: { type: String, enum: AGENCY_STATUS, default: 'PENDING', index: true },
+    // Legacy free-text — superseded by `blockReason` enum above. Kept so we
+    // don't break existing UI strings; new code should write `blockReason`.
     blockedReason: { type: String, default: null },
 
     pan: {
@@ -128,6 +157,12 @@ const AgencySchema = new Schema(
 
 AgencySchema.index({ tenantId: 1, distributorId: 1 });
 AgencySchema.index({ tenantId: 1, status: 1 });
+// Sub-agent fan-out: distributor portal "my sub-agents" list. Sparse because
+// only SUB_AGENT rows have it set.
+AgencySchema.index({ tenantId: 1, parentAgencyId: 1 }, { sparse: true });
+// Hourly recompute cron query: "all CREDIT agencies whose due date crossed
+// today" — the compound index supports both filters with a single scan.
+AgencySchema.index({ module: 1, creditDueDate: 1 }, { sparse: true });
 
 export type AgencyDoc = HydratedDocument<InferSchemaType<typeof AgencySchema>> & {
   _id: Types.ObjectId;

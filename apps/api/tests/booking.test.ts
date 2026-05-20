@@ -9,6 +9,7 @@ import { Inventory } from '../src/models/Inventory.js';
 import { FareRule } from '../src/models/FareRule.js';
 import { Booking } from '../src/models/Booking.js';
 import { WalletTransaction } from '../src/models/WalletTransaction.js';
+import { Wallet } from '../src/models/Wallet.js';
 import { TopupRequest } from '../src/models/TopupRequest.js';
 import { Counter } from '../src/models/Counter.js';
 import { SeriesAdapter } from '../src/adapters/series.adapter.js';
@@ -30,6 +31,7 @@ async function reset(): Promise<void> {
   await Promise.all([
     Booking.deleteMany({}),
     WalletTransaction.deleteMany({}),
+    Wallet.deleteMany({}),
     TopupRequest.deleteMany({}),
     Inventory.deleteMany({}),
     FareRule.deleteMany({}),
