@@ -94,7 +94,15 @@ export const PublicBookingSchema = z.object({
   bookingCode: z.string(),
   status: z.enum(BOOKING_STATUS),
   channel: z.enum(['ONLINE', 'OFFLINE', 'API']),
-  flowSubType: z.enum(['SERIES', 'LCC', 'FSC', 'HOLD', 'TICKET']),
+  // Product discriminator. Flight bookings default to 'FLIGHT' for
+  // back-compat — older serializers that don't set it explicitly still
+  // parse cleanly. Hotel rows (served from /api/v1/bookings via the
+  // hotel-merge adapter) carry 'HOTEL' so the web UI can swap
+  // itinerary cards for a hotel-stay layout and re-label PNR → Confirmation.
+  productType: z.enum(['FLIGHT', 'HOTEL']).default('FLIGHT'),
+  // Flight-side flow tag (LCC / FSC / etc) — for hotel rows we surface
+  // 'HOTEL' as a backup discriminator before productType was added.
+  flowSubType: z.enum(['SERIES', 'LCC', 'FSC', 'HOLD', 'TICKET', 'HOTEL']),
 
   pnr: z.string().nullable(),
   airlinePnr: z.string().nullable(),

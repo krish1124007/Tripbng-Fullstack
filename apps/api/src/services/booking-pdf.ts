@@ -24,6 +24,7 @@ import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import type { Readable } from 'node:stream';
 import type { BookingDoc } from '../models/Booking.js';
+import type { HotelBookingDoc } from '../models/HotelBooking.js';
 
 const PAGE_W = 595;
 const PAGE_H = 842;
@@ -1215,6 +1216,117 @@ export function generateInvoicePdf(booking: BookingDoc): Readable {
 
   doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
   doc.text(rupees(booking.pricing?.agencyPayablePaise ?? 0), { align: 'right' });
+
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(i);
+    doc
+      .fillColor(C.ink3)
+      .fontSize(8)
+      .text(`Page ${i + 1} of ${range.count} · TripBng`, 48, 800, { align: 'center', width: 499 });
+  }
+  doc.end();
+  return stream;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hotel invoice PDF — mirrors generateInvoicePdf() above but reads from
+// HotelBookingDoc. Pdfkit-based, no Chromium. Mock supplier owns the
+// voucher so we issue the invoice off the booking row directly; once
+// a real HotelInvoice model lands (with sequential GST numbers etc.),
+// this falls back the same way the flight invoice route does.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function generateHotelInvoicePdf(booking: HotelBookingDoc): Readable {
+  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
+  const stream = doc as unknown as Readable;
+
+  doc.fontSize(20).fillColor(C.ink1).text('Tax Invoice — Hotel', 48, 48);
+  doc.fontSize(10).fillColor(C.ink3).text('Computer-generated, no signature required', 48, 72);
+
+  doc.moveDown(1.2);
+  const code = booking.bookingCode ?? String(booking._id);
+  doc.fillColor(C.ink1).fontSize(11).text(`Invoice for ${code}`, 48);
+  doc.fontSize(10).fillColor(C.ink3);
+  doc.text(`Issued: ${fmtDateTime(booking.vouchredAt ?? booking.confirmedAt ?? booking.createdAt)}`);
+  doc.text(`Confirmation: ${booking.supplierRefs?.confirmationNo ?? '—'}`);
+
+  doc.moveDown(0.6);
+  doc.fillColor(C.ink2).fontSize(10).text('PROPERTY');
+  doc.moveDown(0.2);
+  doc.fillColor(C.ink1).fontSize(10).text(booking.hotel?.name ?? '—');
+  doc.fillColor(C.ink3).fontSize(9).text(booking.hotel?.address ?? '');
+  if (booking.hotel?.starRating) {
+    doc.text(`${booking.hotel.starRating}-star`);
+  }
+
+  doc.moveDown(0.6);
+  doc.fillColor(C.ink2).fontSize(10).text('STAY');
+  doc.moveDown(0.2);
+  doc.fillColor(C.ink1).fontSize(10);
+  doc.text(`Check-in:  ${fmtDateTime(booking.checkIn)}`);
+  doc.text(`Check-out: ${fmtDateTime(booking.checkOut)}`);
+  doc.text(`Nights:    ${booking.nights}`);
+  if ((booking.rooms ?? []).length > 0) {
+    const r0 = booking.rooms[0]!;
+    doc.text(
+      `Room:      ${r0.name ?? 'Standard'} · ${r0.adults} adult${r0.adults === 1 ? '' : 's'}${
+        (r0.children ?? 0) > 0 ? ` + ${r0.children} child` : ''
+      }${r0.mealPlan ? ` · ${r0.mealPlan}` : ''}`,
+    );
+  }
+
+  if ((booking.guests ?? []).length > 0) {
+    doc.moveDown(0.6);
+    doc.fillColor(C.ink2).fontSize(10).text('GUESTS');
+    doc.moveDown(0.2);
+    doc.fillColor(C.ink1).fontSize(10);
+    for (const g of booking.guests ?? []) {
+      doc.text(`${g.title ?? ''} ${g.firstName ?? ''} ${g.lastName ?? ''}`.trim());
+    }
+  }
+
+  if (booking.gst?.gstin) {
+    doc.moveDown(0.6);
+    doc.fillColor(C.ink2).fontSize(10).text('GST DETAILS');
+    doc.fillColor(C.ink1).fontSize(10).text(`GSTIN: ${booking.gst.gstin}`);
+    if (booking.gst.companyName) doc.text(`Company: ${booking.gst.companyName}`);
+    if (booking.gst.companyAddress) doc.text(`Address: ${booking.gst.companyAddress}`);
+  }
+
+  doc.moveDown(0.8);
+  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
+  doc.moveDown(0.6);
+
+  doc.fillColor(C.ink2).fontSize(10).text('SUMMARY');
+  doc.moveDown(0.3);
+  doc.fillColor(C.ink1).fontSize(10);
+  const perNight = booking.pricing?.perNightPaise ?? 0;
+  const nights = booking.nights;
+  const totalSelling = booking.pricing?.totalSellingPaise ?? 0;
+  const rows: [string, number][] = [
+    [`Room rate × ${nights} night${nights === 1 ? '' : 's'}`, perNight * nights],
+  ];
+  for (const t of booking.taxBreakup ?? []) {
+    if (t.taxAmountPaise > 0) {
+      rows.push([
+        `${t.taxType}${t.taxPercentage ? ` @ ${t.taxPercentage}%` : ''}`,
+        t.taxAmountPaise,
+      ]);
+    }
+  }
+  for (const [label, value] of rows) {
+    if (value === 0) continue;
+    doc.text(label, 48, doc.y, { continued: true });
+    doc.text(rupees(value), { align: 'right' });
+  }
+
+  doc.moveDown(0.4);
+  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
+  doc.moveDown(0.4);
+
+  doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
+  doc.text(rupees(totalSelling), { align: 'right' });
 
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {

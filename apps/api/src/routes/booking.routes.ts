@@ -22,7 +22,7 @@ import {
   issueManually,
   serializeBooking,
 } from '../services/booking.service.js';
-import { generateETicketPdf, generateInvoicePdf } from '../services/booking-pdf.js';
+import { generateETicketPdf, generateHotelInvoicePdf, generateInvoicePdf } from '../services/booking-pdf.js';
 import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { requireNotFrozen } from '../middleware/cutover-freeze.js';
 import {
@@ -187,13 +187,28 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       filter.travelDate = range;
     }
 
-    // Hotel-booking filter mirrors the flight filter but doesn't take a
-    // status query (the status enums differ — q.status is a flight status,
-    // and we explicitly DON'T cross-filter hotels by it; users either get
-    // all hotels back or none of them when filtering by a flight-only
-    // status). The web UI's "On hold / Ticketed / Cancelled" tabs are
-    // flight-shaped today; once a hotel-aware filter ships, this branch
-    // grows.
+    // Hotel-booking filter mirrors the flight filter, including a
+    // status-tab translation. The UI sends flight-shaped status values
+    // ('HOLD', 'TICKETED', 'CANCELLED', 'EXPIRED', 'FAILED'); we map
+    // them to the corresponding HotelBooking statuses so the user gets
+    // unified results when they click a tab. Statuses with no hotel
+    // equivalent (EXPIRED — hotels don't expire) drop hotel rows from
+    // that tab cleanly via skipHotels.
+    const FLIGHT_TO_HOTEL_STATUSES: Record<string, string[] | null> = {
+      INITIATED: ['DRAFT', 'AWAITING_APPROVAL', 'APPROVED'],
+      HOLD: ['HELD'],
+      PAYMENT_PENDING: ['PENDING_SUPPLIER'],
+      TICKETING_IN_PROGRESS: ['PENDING_SUPPLIER'],
+      CONFIRMED: ['CONFIRMED', 'VOUCHERED'],
+      TICKETED: ['CONFIRMED', 'VOUCHERED'],
+      PENDING_MANUAL: null, // flight-only state
+      CANCEL_REQUESTED: ['CANCEL_REQUESTED', 'CANCEL_PROCESSING'],
+      CANCELLED: ['CANCELLED'],
+      REFUND_PENDING: null,
+      REFUNDED: null,
+      FAILED: ['BOOK_FAILED'],
+      EXPIRED: null,
+    };
     const hotelFilter: Record<string, unknown> = listFilter(req.auth!);
     if (q.q) {
       hotelFilter.$or = [
@@ -208,9 +223,18 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       if (q.to) range.$lte = q.to;
       hotelFilter.checkIn = range;
     }
-    // Suppress hotel rows when a flight-only status filter is active — they
-    // wouldn't match anyway, but skipping the query saves a round-trip.
-    const skipHotels = !!q.status;
+    // Translate the flight-status tab → hotel statuses. If the tab has
+    // no hotel equivalent (e.g. EXPIRED), skip the hotel query entirely
+    // so we don't dilute the result set with all hotels.
+    let skipHotels = false;
+    if (q.status) {
+      const hotelStatuses = FLIGHT_TO_HOTEL_STATUSES[q.status];
+      if (hotelStatuses === null) {
+        skipHotels = true;
+      } else if (hotelStatuses) {
+        hotelFilter.status = { $in: hotelStatuses };
+      }
+    }
 
     // Fetch a generous slice from each collection, then merge + paginate in
     // memory. This is fine for dev/agency scales (typically <1000 bookings
@@ -384,6 +408,57 @@ bookingRouter.post(
     try {
       if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
       const body = req.body as ReturnType<typeof CancelBookingRequestSchema.parse>;
+
+      // Disambiguate flight vs hotel by collection. Flight cancel goes
+      // through the full state-machine service; hotel cancel for mock
+      // supplier is an in-line transition + wallet credit (no TBO round
+      // trip available without real creds).
+      const isHotel = !(await Booking.exists({ _id: req.params.id, tenantId: req.auth!.tenantId }));
+      if (isHotel) {
+        if (!req.auth!.agencyId) {
+          throw new AppError('VALIDATION_ERROR', { reason: 'agency context required' });
+        }
+        const filter = listFilter(req.auth!);
+        filter._id = req.params.id;
+        const h = await HotelBooking.findOne(filter);
+        if (!h) throw new AppError('NOT_FOUND');
+        if (['CANCELLED', 'CANCEL_REQUESTED', 'CANCEL_PROCESSING'].includes(h.status)) {
+          throw new AppError('VALIDATION_ERROR', { reason: 'booking already cancelled' });
+        }
+        // Refund the full amount on cancel — mock supplier has no cancel
+        // policy or partial refund window. Real-supplier wiring would
+        // call HotelBooking's cancellationPolicies and the TBO cancel
+        // endpoint to derive the refund amount.
+        const refundPaise = h.pricing?.totalSellingPaise ?? 0;
+        if (refundPaise > 0) {
+          const { walletService } = await import('../services/payment/wallet.service.js');
+          const wallet = await walletService.findOrCreateForAgency(
+            new Types.ObjectId(req.auth!.tenantId),
+            new Types.ObjectId(req.auth!.agencyId),
+          );
+          await walletService.credit({
+            walletId: wallet._id,
+            amount: refundPaise,
+            type: 'REFUND_CREDIT',
+            description: `Hotel cancel ${h.bookingCode ?? String(h._id)} — ${h.hotel?.name ?? 'Hotel'}`,
+            performedBy: new Types.ObjectId(req.auth!.userId),
+            bookingId: h._id,
+            idempotencyKey: `hotel-cancel-${h._id.toHexString()}`,
+            metadata: { reason: body.reason ?? 'agent-cancel' },
+          });
+        }
+        h.status = 'CANCELLED';
+        h.statusHistory.push({
+          status: 'CANCELLED',
+          at: new Date(),
+          by: new Types.ObjectId(req.auth!.userId),
+          note: body.reason?.slice(0, 200) ?? null,
+        });
+        h.cancelledAt = new Date();
+        await h.save();
+        return ok(res, serializeHotelBookingAsPublic(h));
+      }
+
       const b = await cancelBooking(
         {
           tenantId: req.auth!.tenantId,
@@ -587,7 +662,20 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
     const filter = listFilter(req.auth!);
     filter._id = req.params.id;
     const b = await Booking.findOne(filter);
-    if (!b) throw new AppError('NOT_FOUND');
+    if (!b) {
+      // Hotel invoice fallback. Mirrors the flight path below but uses
+      // the hotel-specific PDF generator. Once a real HotelInvoice model
+      // ships (with sequential GST numbers etc.) we'll prefer it here too.
+      const h = await HotelBooking.findOne(filter);
+      if (!h) throw new AppError('NOT_FOUND');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="invoice-${h.bookingCode ?? String(h._id)}.pdf"`,
+      );
+      generateHotelInvoicePdf(h).pipe(res);
+      return;
+    }
 
     // Prefer the structured invoice if one exists.
     const inv = await FlightInvoice.findOne({

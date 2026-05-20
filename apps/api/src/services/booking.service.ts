@@ -1138,6 +1138,7 @@ export function serializeBooking(b: BookingDoc) {
     bookingCode: b.bookingCode,
     status: b.status,
     channel: b.channel,
+    productType: 'FLIGHT' as const,
     flowSubType: b.flowSubType,
     pnr: b.pnr,
     airlinePnr: b.airlinePnr,
