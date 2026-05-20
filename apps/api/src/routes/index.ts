@@ -9,6 +9,7 @@ import { inventoryRouter } from './inventory.routes.js';
 import { markupRuleRouter } from './markup-rule.routes.js';
 import { fareRuleRouter } from './fare-rule.routes.js';
 import { policyRouter } from './policy.routes.js';
+import { mapPolicyRouter } from './map-policy.routes.js';
 import { agencyGroupRouter } from './agency-group.routes.js';
 import { walletRouter } from './wallet.routes.js';
 import { agencyCreditRouter } from './agency-credit.routes.js';
@@ -53,6 +54,7 @@ apiRouter.use('/inventories', inventoryRouter);
 apiRouter.use('/markup-rules', markupRuleRouter);
 apiRouter.use('/fare-rules', fareRuleRouter);
 apiRouter.use('/policies', policyRouter);
+apiRouter.use('/map-policies', mapPolicyRouter);
 apiRouter.use('/agency-groups', agencyGroupRouter);
 apiRouter.use('/wallet', walletRouter);
 // /internal/* — booking engine ↔ wallet service-to-service endpoints.

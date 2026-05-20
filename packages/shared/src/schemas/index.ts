@@ -4,6 +4,7 @@ export * from './user.js';
 export * from './agency.js';
 export * from './distributor.js';
 export * from './supplier.js';
+export * from './map-policy.js';
 export * from './audit.js';
 export * from './inventory.js';
 export * from './markup-rule.js';
