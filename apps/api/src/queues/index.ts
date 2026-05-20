@@ -29,6 +29,7 @@ export const QUEUE_NAMES = {
   APPROVAL_EXPIRY_SWEEPER: 'approval-expiry-sweeper',
   BUS_OPERATOR_CANCELLATION_POLLER: 'bus-operator-cancellation-poller',
   KAFILA_TICKET_POLL: 'kafila-ticket-poll',
+  PAYMENT_RECON_SWEEPER: 'payment-recon-sweeper',
 } as const;
 
 let holdExpiryQueue: Queue | null = null;
@@ -50,6 +51,7 @@ let creditDueReminderQueue: Queue | null = null;
 let approvalExpirySweeperQueue: Queue | null = null;
 let busOperatorCancellationPollerQueue: Queue | null = null;
 let kafilaTicketPollQueue: Queue | null = null;
+let paymentReconSweeperQueue: Queue | null = null;
 
 const workers: Worker[] = [];
 
@@ -200,6 +202,13 @@ export function getKafilaTicketPollQueue(): Queue {
   return kafilaTicketPollQueue;
 }
 
+export function getPaymentReconSweeperQueue(): Queue {
+  if (!paymentReconSweeperQueue) {
+    paymentReconSweeperQueue = new Queue(QUEUE_NAMES.PAYMENT_RECON_SWEEPER, sharedConnection());
+  }
+  return paymentReconSweeperQueue;
+}
+
 /** Enqueue a Kafila ticket-poll job. Booking-service hook: call this
  *  after adapter.hold() if the returned booking's ticket numbers
  *  are empty / CurrentStatus === 'PENDING'. Worker handles the rest:
@@ -292,6 +301,9 @@ export async function startWorkers(): Promise<void> {
     scheduleBusOperatorCancellationPoller,
   } = await import('./bus-operator-cancellation-poller.worker.js');
   const { kafilaTicketPollProcessor } = await import('./kafila-ticket-poll.worker.js');
+  const { paymentReconSweeperProcessor, schedulePaymentReconSweeper } = await import(
+    './payment-recon-sweeper.worker.js'
+  );
 
   const opts: WorkerOptions = {
     connection: bullmqRedis,
@@ -465,6 +477,16 @@ export async function startWorkers(): Promise<void> {
       { ...opts, concurrency: 5 },
     ),
   );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.PAYMENT_RECON_SWEEPER,
+      paymentReconSweeperProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — sweep is fast and bounded (≤100 PTs/tick); overlapping
+      // ticks would risk double-calling markSuccess on the same PT before
+      // the state transition lands.
+      { ...opts, concurrency: 1 },
+    ),
+  );
 
   for (const w of workers) {
     w.on('failed', (job, err) =>
@@ -509,6 +531,10 @@ export async function startWorkers(): Promise<void> {
   // Bus operator-cancellation poller — daily 06:00 IST.
   await scheduleBusOperatorCancellationPoller(getBusOperatorCancellationPollerQueue());
 
+  // Payment-recon sweeper — every 15 min. Catches PG webhook drops by
+  // polling the provider for any PT stuck in PENDING > 30 min.
+  await schedulePaymentReconSweeper(getPaymentReconSweeperQueue());
+
   logger.info({ workers: workers.length, isProd }, 'workers started');
 }
 
@@ -536,6 +562,7 @@ export async function stopWorkers(): Promise<void> {
       approvalExpirySweeperQueue,
       busOperatorCancellationPollerQueue,
       kafilaTicketPollQueue,
+      paymentReconSweeperQueue,
     ]
       .filter((q): q is Queue => !!q)
       .map((q) => q.close()),
@@ -559,4 +586,5 @@ export async function stopWorkers(): Promise<void> {
   approvalExpirySweeperQueue = null;
   busOperatorCancellationPollerQueue = null;
   kafilaTicketPollQueue = null;
+  paymentReconSweeperQueue = null;
 }
