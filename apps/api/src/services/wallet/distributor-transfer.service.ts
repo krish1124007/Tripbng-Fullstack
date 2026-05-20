@@ -161,6 +161,96 @@ export async function approveTransfer(
 }
 
 /**
+ * Recall a previously COMPLETED transfer — reverses the ledger legs and
+ * creates a new DistributorTransfer row (type=RECALL, originalTransferId
+ * pointing at the parent). Used when the distributor or admin needs to
+ * pull back balance that was over-allocated to a sub-agent.
+ *
+ * Authorisation: same as forward TRANSFER — distributor can recall its own
+ * transfers; SUPER_ADMIN may recall any.
+ *
+ * Pre-conditions:
+ *   * Original must be in COMPLETED status (REVERSED / FAILED / REJECTED
+ *     can't be recalled).
+ *   * Agency must have sufficient wallet balance to give back.
+ *     (We reuse the standard postDebit which throws INSUFFICIENT_WALLET.)
+ *
+ * Idempotency: a row already in REVERSED status cannot be recalled again.
+ * The original transfer is flipped to REVERSED only after both legs land.
+ */
+export async function recallTransfer(
+  ctx: ActorContext,
+  originalTransferId: string,
+  notes?: string | null,
+): Promise<DistributorTransferDoc> {
+  const original = await DistributorTransfer.findById(originalTransferId);
+  if (!original) throw new AppError('NOT_FOUND');
+  if (String(original.tenantId) !== ctx.tenantId) throw new AppError('FORBIDDEN');
+
+  // Authorisation gate.
+  if (ctx.role === 'DISTRIBUTOR') {
+    if (!ctx.distributorId || String(ctx.distributorId) !== String(original.distributorId)) {
+      throw new AppError('FORBIDDEN', { reason: 'recall only your own transfers' });
+    }
+  } else if (ctx.role !== 'SUPER_ADMIN') {
+    throw new AppError('FORBIDDEN');
+  }
+
+  if (original.type !== 'TRANSFER') {
+    throw new AppError('VALIDATION_ERROR', { reason: 'only TRANSFER rows can be recalled' });
+  }
+  if (original.status !== 'COMPLETED') {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `original is ${original.status}, only COMPLETED transfers can be recalled`,
+    });
+  }
+
+  const transferRef = await nextTransferRef();
+  const recall = await DistributorTransfer.create({
+    tenantId: ctx.tenantId,
+    transferRef,
+    distributorId: original.distributorId,
+    agencyId: original.agencyId,
+    amount: original.amount,
+    type: 'RECALL',
+    status: 'COMPLETED', // tentative — flipped to FAILED if legs error
+    approvalRequired: false,
+    originalTransferId: original._id,
+    initiatedBy: ctx.userId,
+    notes: notes ?? null,
+  });
+
+  await recordAudit({
+    tenantId: ctx.tenantId,
+    actorId: ctx.userId,
+    actorRole: ctx.role,
+    action: 'distributor.transfer.recall.initiated',
+    resource: 'distributor-transfer',
+    resourceId: String(recall._id),
+    after: {
+      recallRef: transferRef,
+      originalRef: original.transferRef,
+      amountPaise: original.amount,
+    },
+    ip: ctx.ipAddress ?? null,
+  });
+
+  try {
+    await executeRecallLegs(recall, ctx);
+    // Mark the original as REVERSED only after the recall legs landed.
+    original.status = 'REVERSED';
+    await original.save();
+  } catch (err) {
+    // executeRecallLegs already set recall.status=FAILED. Rethrow so the
+    // caller sees the failure (insufficient balance on agency wallet is the
+    // most common cause — the agency may have spent the transferred balance).
+    throw err;
+  }
+
+  return recall;
+}
+
+/**
  * Admin-only — rejects a PENDING_APPROVAL row. No ledger impact.
  */
 export async function rejectTransfer(
@@ -385,6 +475,129 @@ async function executeTransferLegs(
       after: { reason: transfer.failureReason, transferRef: transfer.transferRef },
       success: false,
       error: transfer.failureReason,
+      ip: ctx.ipAddress ?? null,
+    }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * Execute the two reverse legs for a RECALL: DEBIT the agency, CREDIT the
+ * distributor. Same lock/atomicity story as executeTransferLegs — each leg
+ * is per-wallet atomic, the DistributorTransfer row is the cross-leg state.
+ * Agency wallet running out is the expected failure mode (caught + reported).
+ */
+async function executeRecallLegs(
+  recall: DistributorTransferDoc,
+  ctx: ActorContext,
+): Promise<DistributorTransferDoc> {
+  const distId = String(recall.distributorId);
+  const agencyId = String(recall.agencyId);
+
+  try {
+    // Leg 1 — DEBIT the agency. Throws INSUFFICIENT_WALLET if the agency
+    // has already spent the transferred balance. We DON'T compensate the
+    // distributor on failure because no money has moved yet.
+    const debit = await postDebit({
+      tenantId: ctx.tenantId,
+      walletKind: 'AGENCY',
+      walletOwnerId: agencyId,
+      type: 'TRANSFER_REVERSAL',
+      amountPaise: recall.amount,
+      performedBy: ctx.userId,
+      description: `Recall to distributor (ref ${recall.transferRef})`,
+      ipAddress: ctx.ipAddress ?? null,
+      metadata: {
+        transferRef: recall.transferRef,
+        distributorId: distId,
+        type: 'RECALL',
+        originalTransferId: String(recall.originalTransferId),
+      },
+    });
+
+    let credit;
+    try {
+      credit = await postCredit({
+        tenantId: ctx.tenantId,
+        walletKind: 'DISTRIBUTOR',
+        walletOwnerId: distId,
+        type: 'TRANSFER_REVERSAL',
+        amountPaise: recall.amount,
+        performedBy: ctx.userId,
+        relatedTxnId: String(debit._id),
+        description: `Recall from agency (ref ${recall.transferRef})`,
+        ipAddress: ctx.ipAddress ?? null,
+        metadata: {
+          transferRef: recall.transferRef,
+          agencyId,
+          debitTxnId: String(debit._id),
+          type: 'RECALL',
+          originalTransferId: String(recall.originalTransferId),
+        },
+      });
+    } catch (err) {
+      // Mirror executeTransferLegs's compensation pattern.
+      logger.fatal(
+        { err, transferRef: recall.transferRef, debitTxnId: String(debit._id) },
+        'distributor-recall: leg-2 failed — running compensation',
+      );
+      try {
+        await postCredit({
+          tenantId: ctx.tenantId,
+          walletKind: 'AGENCY',
+          walletOwnerId: agencyId,
+          type: 'ADJUSTMENT_CREDIT',
+          amountPaise: recall.amount,
+          performedBy: ctx.userId,
+          relatedTxnId: String(debit._id),
+          description: `Compensation for failed recall ${recall.transferRef}`,
+          metadata: { transferRef: recall.transferRef, reason: 'recall-leg-2-failed' },
+        });
+      } catch (compErr) {
+        logger.fatal(
+          { compErr, transferRef: recall.transferRef },
+          'distributor-recall: compensation also failed — MANUAL RECONCILIATION REQUIRED',
+        );
+      }
+      throw err;
+    }
+
+    recall.outLedgerId = debit._id;
+    recall.inLedgerId = credit._id;
+    recall.status = 'COMPLETED';
+    await recall.save();
+
+    await recordAudit({
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      actorRole: ctx.role,
+      action: 'distributor.transfer.recall.completed',
+      resource: 'distributor-transfer',
+      resourceId: String(recall._id),
+      after: {
+        transferRef: recall.transferRef,
+        amountPaise: recall.amount,
+        debitTxnId: String(debit._id),
+        creditTxnId: String(credit._id),
+      },
+      ip: ctx.ipAddress ?? null,
+    });
+
+    return recall;
+  } catch (err) {
+    recall.status = 'FAILED';
+    recall.failureReason = err instanceof Error ? err.message : String(err);
+    await recall.save().catch(() => undefined);
+    await recordAudit({
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      actorRole: ctx.role,
+      action: 'distributor.transfer.recall.failed',
+      resource: 'distributor-transfer',
+      resourceId: String(recall._id),
+      after: { reason: recall.failureReason, transferRef: recall.transferRef },
+      success: false,
+      error: recall.failureReason,
       ip: ctx.ipAddress ?? null,
     }).catch(() => undefined);
     throw err;

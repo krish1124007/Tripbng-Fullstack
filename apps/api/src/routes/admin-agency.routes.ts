@@ -20,6 +20,7 @@ import {
 } from '../services/wallet/agency-config.service.js';
 import {
   approveTransfer,
+  recallTransfer,
   rejectTransfer,
 } from '../services/wallet/distributor-transfer.service.js';
 import { DistributorTransfer } from '../models/DistributorTransfer.js';
@@ -230,6 +231,10 @@ const RejectTransferBodySchema = z.object({
   reason: z.string().min(3).max(500),
 });
 
+const RecallTransferBodySchema = z.object({
+  notes: z.string().max(500).optional().nullable(),
+});
+
 adminAgencyRouter.post(
   '/transfers/:id/reject',
   validate(RejectTransferBodySchema),
@@ -251,6 +256,43 @@ adminAgencyRouter.post(
         transferRef: transfer.transferRef,
         status: transfer.status,
         rejectionReason: transfer.rejectionReason,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/transfers/:id/recall — reverse a COMPLETED transfer
+// ─────────────────────────────────────────────────────────────────────────────
+
+adminAgencyRouter.post(
+  '/transfers/:id/recall',
+  validate(RecallTransferBodySchema),
+  async (req, res, next) => {
+    try {
+      const { notes } = req.body as ReturnType<typeof RecallTransferBodySchema.parse>;
+      const recall = await recallTransfer(
+        {
+          tenantId: req.auth!.tenantId,
+          userId: req.auth!.userId,
+          role: req.auth!.role,
+          ipAddress: req.ip ?? null,
+        },
+        req.params.id!,
+        notes ?? null,
+      );
+      return ok(res, {
+        id: String(recall._id),
+        transferRef: recall.transferRef,
+        type: recall.type,
+        status: recall.status,
+        originalTransferId: recall.originalTransferId
+          ? String(recall.originalTransferId)
+          : null,
+        outLedgerId: recall.outLedgerId ? String(recall.outLedgerId) : null,
+        inLedgerId: recall.inLedgerId ? String(recall.inLedgerId) : null,
       });
     } catch (err) {
       next(err);
