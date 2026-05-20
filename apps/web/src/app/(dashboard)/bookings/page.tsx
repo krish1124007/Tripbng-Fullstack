@@ -8,6 +8,7 @@ import {
   ChevronsUpDown,
   Download,
   Filter as FilterIcon,
+  Hotel as HotelIcon,
   Plane,
   PlaneTakeoff,
   Rows3,
@@ -72,17 +73,33 @@ export default function BookingsPage() {
         header: 'Booking',
         cell: ({ row }) => {
           const b = row.original;
+          // Server attaches productType='HOTEL' for hotel-source rows; the
+          // shared PublicBooking type doesn't know about it yet, so we read
+          // through an unknown-cast. flowSubType also flips to 'HOTEL' for
+          // these rows — either signal works as a discriminator.
+          const isHotel =
+            (b as unknown as { productType?: string }).productType === 'HOTEL' ||
+            b.flowSubType === ('HOTEL' as never);
+          const Icon = isHotel ? HotelIcon : Plane;
+          // Hotel detail page lives under /hotels/[code] — but our hotel
+          // detail page expects a search-cached row keyed by the offer id,
+          // not the booking id. Until a real GET /hotels/bookings/[id] UI
+          // ships, hotel rows on the unified list link back to themselves
+          // and just show the row data; flight rows go to /bookings/[id].
+          const href = isHotel ? `/bookings` : `/bookings/${b.id}`;
           return (
             <Link
-              href={`/bookings/${b.id}`}
+              href={href}
               className="group flex items-center gap-3 transition-colors hover:text-brand-700 dark:hover:text-brand-300"
             >
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-brand-50 text-brand-700 transition-colors group-hover:bg-brand-100 dark:bg-brand-500/15 dark:text-brand-300">
-                <Plane className="h-4 w-4" strokeWidth={1.75} />
+                <Icon className="h-4 w-4" strokeWidth={1.75} />
               </span>
               <div className="min-w-0">
                 <p className="font-mono text-xs font-bold text-ink-1">{b.bookingCode}</p>
-                <p className="font-mono text-[10px] text-ink-3">PNR {b.pnr ?? '—'}</p>
+                <p className="font-mono text-[10px] text-ink-3">
+                  {isHotel ? 'Conf' : 'PNR'} {b.pnr ?? '—'}
+                </p>
               </div>
             </Link>
           );
