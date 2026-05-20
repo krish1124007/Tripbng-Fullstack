@@ -30,6 +30,7 @@ import {
 } from '../../models/DepositIncentiveConfig.js';
 import { recordAudit } from '../audit.service.js';
 import { logger } from '../../config/logger.js';
+import { enqueueAlert } from '../alerts/index.js';
 import type { Types } from 'mongoose';
 
 export interface AdminContext {
@@ -135,6 +136,27 @@ export async function switchAgencyModule(
     after: { module: input.newModule, force: !!input.force, notes: input.notes ?? null },
     ip: ctx.ipAddress ?? null,
   });
+
+  // Notify the agency owner — fire-and-forget so alert failure doesn't
+  // unwind the module switch.
+  void enqueueAlert(
+    {
+      event: 'MODULE_SWITCHED',
+      vars: {
+        previousModule: previous,
+        newModule: input.newModule,
+        notes: input.notes ?? null,
+        forced: !!input.force,
+      },
+    },
+    [{ kind: 'agency', id: String(agency._id) }],
+    {
+      tenantId: ctx.tenantId,
+      correlationKey: `module-switch:${String(agency._id)}:${Date.now()}`,
+    },
+  ).catch((err) =>
+    logger.warn({ err, agencyId: String(agency._id) }, 'agency-config: MODULE_SWITCHED alert enqueue failed'),
+  );
 
   return { agency, previousModule: previous };
 }

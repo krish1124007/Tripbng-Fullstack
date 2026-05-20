@@ -26,6 +26,8 @@
 import type { Job, Queue } from 'bullmq';
 import { logger } from '../config/logger.js';
 import { applyIncentive } from '../services/wallet/di-incentive.service.js';
+import { enqueueAlert } from '../services/alerts/index.js';
+import { Wallet } from '../models/Wallet.js';
 
 export interface DiIncentiveJob {
   tenantId: string;
@@ -65,17 +67,35 @@ export async function diIncentiveProcessor(job: Job<DiIncentiveJob>): Promise<vo
       netCreditPaise: result.compute?.netCreditPaise ?? 0,
     });
 
-    // TODO (Phase-2.1): enqueue INCENTIVE_CREDITED notification via
-    // services/alerts/index.ts. The template isn't authored yet — once it
-    // lands, swap this logger.info for an enqueueAlert call.
-    logger.info(
-      {
-        agencyId: data.agencyId,
-        parentLedgerId: data.parentLedgerId,
-        netCreditPaise: result.compute?.netCreditPaise ?? 0,
-      },
-      'di-incentive: would notify INCENTIVE_CREDITED (template pending)',
-    );
+    // Notify the agency owner that incentive landed in their wallet. Fetch
+    // the post-credit balance for the template — cheap, single Wallet doc.
+    try {
+      const wallet = await Wallet.findOne({ agencyId: data.agencyId })
+        .select('balance')
+        .lean();
+      await enqueueAlert(
+        {
+          event: 'INCENTIVE_CREDITED',
+          vars: {
+            depositPaise: data.depositPaise,
+            incentivePaise: result.compute?.incentivePaise ?? 0,
+            tdsPaise: result.compute?.tdsPaise ?? 0,
+            netCreditPaise: result.compute?.netCreditPaise ?? 0,
+            walletBalanceAfterPaise: wallet?.balance ?? 0,
+          },
+        },
+        [{ kind: 'agency', id: data.agencyId }],
+        {
+          tenantId: data.tenantId,
+          correlationKey: `incentive:${data.parentLedgerId}`,
+        },
+      );
+    } catch (err) {
+      logger.warn(
+        { err, agencyId: data.agencyId, parentLedgerId: data.parentLedgerId },
+        'di-incentive: enqueueAlert INCENTIVE_CREDITED failed (continuing)',
+      );
+    }
   } catch (err) {
     logger.error(
       { err, agencyId: data.agencyId, parentLedgerId: data.parentLedgerId, source: data.source },

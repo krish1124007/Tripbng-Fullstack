@@ -27,6 +27,11 @@ import { hotelBookingRejectedTemplate } from './hotel-booking-rejected.js';
 import { hotelBookingConfirmedTemplate } from './hotel-booking-confirmed.js';
 import { hotelBookingFailedTemplate } from './hotel-booking-failed.js';
 import { hotelBookingCancelledTemplate } from './hotel-booking-cancelled.js';
+import { creditDueReminderTemplate } from './credit-due-reminder.js';
+import { incentiveCreditedTemplate } from './incentive-credited.js';
+import { distributorTransferInTemplate } from './distributor-transfer-in.js';
+import { moduleSwitchedTemplate } from './module-switched.js';
+import { adjustmentPostedTemplate } from './adjustment-posted.js';
 
 /** Partial — events without a template here can't be sent. The dispatcher
  *  treats a missing entry as "alert disabled" + logs a warning. */
@@ -60,4 +65,16 @@ export const TEMPLATES: Partial<Record<AlertEvent, AlertTemplate>> = {
 
   // Ops
   CIRCUIT_BREAKER_TRIPPED: circuitBreakerTrippedTemplate,
+
+  // Agency-wallet — credit-due reminders, DI incentive, distributor transfer,
+  // module switch, manual adjustments. All four credit-due anchors share the
+  // same template (it branches on event name internally).
+  CREDIT_DUE_T_MINUS_3: creditDueReminderTemplate,
+  CREDIT_DUE_T_MINUS_1: creditDueReminderTemplate,
+  CREDIT_DUE_TODAY: creditDueReminderTemplate,
+  CREDIT_OVERDUE: creditDueReminderTemplate,
+  INCENTIVE_CREDITED: incentiveCreditedTemplate,
+  DISTRIBUTOR_TRANSFER_IN: distributorTransferInTemplate,
+  MODULE_SWITCHED: moduleSwitchedTemplate,
+  ADJUSTMENT_POSTED: adjustmentPostedTemplate,
 };

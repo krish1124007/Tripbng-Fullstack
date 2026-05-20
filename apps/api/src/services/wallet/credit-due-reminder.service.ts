@@ -25,6 +25,9 @@ import { Agency, type AgencyDoc } from '../../models/Agency.js';
 import { Wallet } from '../../models/Wallet.js';
 import { redis } from '../../config/redis.js';
 import { logger } from '../../config/logger.js';
+import { env } from '../../config/env.js';
+import { enqueueAlert } from '../alerts/index.js';
+import type { AlertEvent } from '../alerts/types.js';
 
 /** Anchors evaluated each tick. Stored as offset in DAYS from due date. */
 export const REMINDER_OFFSETS: readonly { days: number; event: string }[] = [
@@ -154,7 +157,7 @@ async function fireReminder(
   creditUsedPaise: number,
   offsetDays: number,
 ): Promise<void> {
-  const eventLabel =
+  const event: AlertEvent =
     offsetDays === -3
       ? 'CREDIT_DUE_T_MINUS_3'
       : offsetDays === -1
@@ -163,20 +166,40 @@ async function fireReminder(
           ? 'CREDIT_DUE_TODAY'
           : 'CREDIT_OVERDUE';
 
-  // TODO (Phase-9 — notification templates):
-  // Once `services/alerts/templates/credit-due-*.ts` are authored, swap
-  // the log line below for an enqueueAlert call. The dedupe key already
-  // protects against double-fire, so this swap is a one-import change.
-  logger.info(
-    {
-      event: eventLabel,
-      agencyId: String(agency._id),
-      tenantId: String(agency.tenantId),
-      ownerUserId: agency.ownerUserId ? String(agency.ownerUserId) : null,
-      creditUsedPaise,
-      dueDateOffsetDays: offsetDays,
-      dueDate: agency.creditDueDate,
-    },
-    'credit-due-reminder: would fire (template pending)',
-  );
+  const dueDate = (agency.creditDueDate as Date | null)?.toISOString() ?? null;
+  if (!dueDate) {
+    // Defensive — the agency-find filter already required `creditDueDate != null`,
+    // but a value can flip during a concurrent admin write. Skip gracefully.
+    return;
+  }
+  const payNowUrl = `${env.WEB_BASE_URL.replace(/\/$/, '')}/wallet/credit`;
+
+  try {
+    await enqueueAlert(
+      {
+        event,
+        vars: {
+          creditUsedPaise,
+          creditLimitPaise: agency.creditLimit ?? 0,
+          dueDate,
+          offsetDays,
+          payNowUrl,
+        },
+      },
+      [{ kind: 'agency', id: String(agency._id) }],
+      {
+        tenantId: String(agency.tenantId),
+        // Correlation key matches the Redis dedupe so cross-system audit
+        // joins are clean.
+        correlationKey: `credit-due:${String(agency._id)}:${offsetDays}`,
+      },
+    );
+  } catch (err) {
+    // Alert enqueue failure must not crash the cron. The dedupe key is
+    // already set, so a manual re-fire requires DEL-ing it first.
+    logger.warn(
+      { err, agencyId: String(agency._id), event },
+      'credit-due-reminder: enqueueAlert failed (continuing)',
+    );
+  }
 }

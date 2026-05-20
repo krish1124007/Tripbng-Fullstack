@@ -36,6 +36,9 @@ import {
 } from '../../models/PendingAdjustment.js';
 import { recordAudit } from '../audit.service.js';
 import { adjustWallet } from './adjust.js';
+import { enqueueAlert } from '../alerts/index.js';
+import { Wallet } from '../../models/Wallet.js';
+import { logger } from '../../config/logger.js';
 
 // Local context — admins don't carry an `agencyId` / `distributorId`, so we
 // don't burden callers with passing nulls for those. Matches the pattern
@@ -102,6 +105,14 @@ export async function proposeAdjustment(
         ...(input.distributorId ? { distributorId: input.distributorId } : {}),
       },
     );
+    void notifyAdjustmentPosted(ctx, {
+      direction: input.direction,
+      amountPaise: input.amountPaise,
+      reason: input.reason,
+      agencyId: input.agencyId ?? null,
+      distributorId: input.distributorId ?? null,
+      wasApproved: false,
+    });
     return { executed: true, ledgerTxnId: result.txnId, pendingId: null };
   }
 
@@ -208,6 +219,15 @@ export async function approveAdjustment(
       ledgerTxnId: result.txnId,
     },
     ip: ctx.ipAddress ?? null,
+  });
+
+  void notifyAdjustmentPosted(ctx, {
+    direction: pending.direction,
+    amountPaise: pending.amountPaise,
+    reason: pending.reason,
+    agencyId: pending.agencyId ? String(pending.agencyId) : null,
+    distributorId: pending.distributorId ? String(pending.distributorId) : null,
+    wasApproved: true,
   });
 
   return pending;
@@ -330,4 +350,62 @@ async function loadPending(
   const row = await PendingAdjustment.findOne({ _id: pendingId, tenantId: ctx.tenantId });
   if (!row) throw new AppError('NOT_FOUND');
   return row;
+}
+
+/**
+ * Fire the ADJUSTMENT_POSTED notification for an executed adjustment. Used
+ * by both the fast-path (proposeAdjustment) and the approval path
+ * (approveAdjustment). Fire-and-forget — alert failure must not unwind the
+ * ledger entry that already committed.
+ */
+async function notifyAdjustmentPosted(
+  ctx: AdjustApprovalContext,
+  input: {
+    direction: 'CREDIT' | 'DEBIT';
+    amountPaise: number;
+    reason: string;
+    agencyId?: string | null;
+    distributorId?: string | null;
+    wasApproved: boolean;
+  },
+): Promise<void> {
+  try {
+    const filter = input.agencyId
+      ? { agencyId: input.agencyId }
+      : { distributorId: input.distributorId };
+    const wallet = await Wallet.findOne(filter).select('balance').lean();
+    const balanceAfter = wallet?.balance ?? 0;
+
+    const recipientRef = input.agencyId
+      ? ({ kind: 'agency', id: input.agencyId } as const)
+      : // For distributor adjustments we don't have a 'distributor' recipient
+        // kind — skip the notification rather than mis-route. Audit + admin UI
+        // already record the change; a follow-up can add a Distributor.ownerUserId
+        // resolver step here.
+        null;
+    if (!recipientRef) return;
+
+    await enqueueAlert(
+      {
+        event: 'ADJUSTMENT_POSTED',
+        vars: {
+          direction: input.direction,
+          amountPaise: input.amountPaise,
+          reason: input.reason,
+          walletBalanceAfterPaise: balanceAfter,
+          wasApproved: input.wasApproved,
+        },
+      },
+      [recipientRef],
+      {
+        tenantId: ctx.tenantId,
+        correlationKey: `adjustment:${input.agencyId ?? input.distributorId}:${Date.now()}`,
+      },
+    );
+  } catch (err) {
+    logger.warn(
+      { err, agencyId: input.agencyId, distributorId: input.distributorId },
+      'adjust-approval: ADJUSTMENT_POSTED enqueue failed (continuing)',
+    );
+  }
 }

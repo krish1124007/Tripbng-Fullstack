@@ -42,6 +42,8 @@ import {
 } from '../../models/DistributorTransfer.js';
 import { recordAudit } from '../audit.service.js';
 import { postCredit, postDebit } from './ledger.js';
+import { enqueueAlert } from '../alerts/index.js';
+import { Wallet } from '../../models/Wallet.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -459,6 +461,7 @@ async function executeTransferLegs(
       ip: ctx.ipAddress ?? null,
     });
 
+    void notifyTransferIn(ctx.tenantId, transfer, 'TRANSFER').catch(() => undefined);
     return transfer;
   } catch (err) {
     // Persist FAILED + reason so ops sees it in the queue.
@@ -583,6 +586,7 @@ async function executeRecallLegs(
       ip: ctx.ipAddress ?? null,
     });
 
+    void notifyTransferIn(ctx.tenantId, recall, 'RECALL').catch(() => undefined);
     return recall;
   } catch (err) {
     recall.status = 'FAILED';
@@ -602,4 +606,65 @@ async function executeRecallLegs(
     }).catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * Notify the receiving party that balance just landed in their wallet.
+ *
+ * Direction-aware:
+ *   * type=TRANSFER  — the AGENCY receives; recipient is the agency owner.
+ *   * type=RECALL    — the DISTRIBUTOR receives; recipient is the
+ *                      distributor owner (resolved via Distributor.ownerUserId).
+ *
+ * Fire-and-forget — caller wraps with `.catch()` so an alert failure
+ * cannot roll back the ledger write that already committed.
+ */
+async function notifyTransferIn(
+  tenantId: string,
+  transfer: DistributorTransferDoc,
+  type: 'TRANSFER' | 'RECALL',
+): Promise<void> {
+  // Look up the distributor display name + the receiving-side wallet
+  // balance for the template's "wallet balance after" line.
+  const distributor = await Distributor.findById(transfer.distributorId)
+    .select('companyName ownerUserId')
+    .lean();
+  const distributorName = distributor?.companyName ?? 'Your distributor';
+
+  let walletBalanceAfterPaise = 0;
+  let recipientRef:
+    | { kind: 'agency'; id: string }
+    | { kind: 'user'; id: string };
+  if (type === 'TRANSFER') {
+    const w = await Wallet.findOne({ agencyId: transfer.agencyId }).select('balance').lean();
+    walletBalanceAfterPaise = w?.balance ?? 0;
+    recipientRef = { kind: 'agency', id: String(transfer.agencyId) };
+  } else {
+    const w = await Wallet.findOne({ distributorId: transfer.distributorId })
+      .select('balance')
+      .lean();
+    walletBalanceAfterPaise = w?.balance ?? 0;
+    // The Distributor's owner is the receiving user — alert system doesn't
+    // have a 'distributor' recipient ref, so we resolve to the owner user.
+    if (!distributor?.ownerUserId) return;
+    recipientRef = { kind: 'user', id: String(distributor.ownerUserId) };
+  }
+
+  await enqueueAlert(
+    {
+      event: 'DISTRIBUTOR_TRANSFER_IN',
+      vars: {
+        transferRef: transfer.transferRef,
+        amountPaise: transfer.amount,
+        distributorName,
+        type,
+        walletBalanceAfterPaise,
+      },
+    },
+    [recipientRef],
+    {
+      tenantId,
+      correlationKey: `transfer-in:${transfer.transferRef}`,
+    },
+  );
 }

@@ -49,6 +49,20 @@ const DEFAULT_CHANNELS: Record<AlertEvent, AlertChannel[]> = {
 
   // Ops
   CIRCUIT_BREAKER_TRIPPED: ['email'], // ops inbox only
+
+  // Agency-wallet
+  // Credit-due reminders escalate by anchor: heads-up is in-app + email only;
+  // T-1 / today / overdue add WhatsApp for urgency.
+  CREDIT_DUE_T_MINUS_3: ['email', 'inapp'],
+  CREDIT_DUE_T_MINUS_1: ['email', 'whatsapp', 'inapp'],
+  CREDIT_DUE_TODAY: ['email', 'whatsapp', 'inapp'],
+  CREDIT_OVERDUE: ['email', 'whatsapp', 'inapp'],
+  // Incentives + transfers feel like a "receipt" — email + in-app, no WA.
+  INCENTIVE_CREDITED: ['email', 'inapp'],
+  DISTRIBUTOR_TRANSFER_IN: ['email', 'inapp'],
+  // Admin actions — quiet by default. Agency owner gets a record, not a ping.
+  MODULE_SWITCHED: ['email', 'inapp'],
+  ADJUSTMENT_POSTED: ['email', 'inapp'],
 };
 
 /**

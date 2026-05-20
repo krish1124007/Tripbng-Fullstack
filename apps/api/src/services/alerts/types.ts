@@ -42,7 +42,20 @@ export type AlertEvent =
   | 'HOTEL_BOOKING_FAILED'
   | 'HOTEL_BOOKING_CANCELLED'
   // Ops-only
-  | 'CIRCUIT_BREAKER_TRIPPED';
+  | 'CIRCUIT_BREAKER_TRIPPED'
+  // ── Agency-wallet additions (Phases 1-8 of AGENCY_WALLET_SYSTEM spec) ──
+  // Credit-due reminder anchors (spec §8)
+  | 'CREDIT_DUE_T_MINUS_3'
+  | 'CREDIT_DUE_T_MINUS_1'
+  | 'CREDIT_DUE_TODAY'
+  | 'CREDIT_OVERDUE'
+  // DI module — async incentive worker fires this post-credit
+  | 'INCENTIVE_CREDITED'
+  // Distributor → sub-agent balance landed (TRANSFER or RECALL completed)
+  | 'DISTRIBUTOR_TRANSFER_IN'
+  // Admin actions
+  | 'MODULE_SWITCHED'
+  | 'ADJUSTMENT_POSTED';
 
 export type AlertChannel = 'email' | 'whatsapp' | 'inapp';
 
@@ -145,6 +158,75 @@ export interface BreakerVars {
   windowSec: number;
 }
 
+// ── Agency-wallet vars ──
+
+/** Credit-due reminders — same shape for T-3 / T-1 / T+0 / T+3; the event
+ *  name disambiguates urgency at template-render time. */
+export interface CreditDueVars {
+  /** Outstanding credit balance in paise (creditUsed at the time of fire). */
+  creditUsedPaise: number;
+  creditLimitPaise: number;
+  /** ISO date of the due date, anchored to UTC midnight. */
+  dueDate: string;
+  /** Signed offset in days from now to due (negative = future, +3 = overdue). */
+  offsetDays: number;
+  /** Agency-dashboard URL where the user goes to pay down. */
+  payNowUrl: string;
+}
+
+/** Fired after the DI incentive worker commits the INCENTIVE_CREDIT (+
+ *  optional TDS_DEDUCT) ledger rows for a deposit. */
+export interface IncentiveCreditedVars {
+  /** Source deposit amount in paise. */
+  depositPaise: number;
+  /** Gross incentive (before TDS) in paise. */
+  incentivePaise: number;
+  /** TDS withheld in paise. Zero when tdsApplicable=false. */
+  tdsPaise: number;
+  /** Net wallet credit (= incentive − tds), in paise. */
+  netCreditPaise: number;
+  /** Wallet balance after the incentive applied, in paise. */
+  walletBalanceAfterPaise: number;
+}
+
+/** Fired on the receiving side of a distributor→sub-agent transfer (or its
+ *  reverse, when type=RECALL — the template differentiates via `type`). */
+export interface DistributorTransferInVars {
+  transferRef: string;
+  amountPaise: number;
+  /** Display name of the distributor sending (or recalling from) the balance. */
+  distributorName: string;
+  /** Direction signal — RECALL surfaces a different message than the normal
+   *  TRANSFER receipt. */
+  type: 'TRANSFER' | 'RECALL';
+  /** Wallet balance after the transfer landed, in paise. */
+  walletBalanceAfterPaise: number;
+}
+
+/** Admin switched the agency's module. Auditable + visible to the agency
+ *  owner so they understand any change in billing behaviour. */
+export interface ModuleSwitchedVars {
+  previousModule: 'CREDIT' | 'DI' | 'CASH' | 'DISTRIBUTOR' | 'SUB_AGENT';
+  newModule: 'CREDIT' | 'DI' | 'CASH' | 'DISTRIBUTOR' | 'SUB_AGENT';
+  /** Admin-supplied free-form context, if any. */
+  notes: string | null;
+  /** Whether the switch used the force=true override (CREDIT→other with
+   *  outstanding credit). Surfaces in the notification body. */
+  forced: boolean;
+}
+
+/** Manual wallet adjustment landed (either direct execute below threshold,
+ *  or via two-person approval above). */
+export interface AdjustmentPostedVars {
+  direction: 'CREDIT' | 'DEBIT';
+  amountPaise: number;
+  reason: string;
+  /** Wallet balance after the adjustment, in paise. */
+  walletBalanceAfterPaise: number;
+  /** True when the adjustment went through the two-person approval queue. */
+  wasApproved: boolean;
+}
+
 /** Hotel-booking lifecycle vars — shared base for CONFIRMED / FAILED /
  *  CANCELLED. The discriminated union below extends this with event-
  *  specific extras (refundPaise on CANCELLED, etc.). */
@@ -219,7 +301,16 @@ export type AlertPayload =
         cancellationFeePaise: number;
       };
     }
-  | { event: 'CIRCUIT_BREAKER_TRIPPED'; vars: BreakerVars };
+  | { event: 'CIRCUIT_BREAKER_TRIPPED'; vars: BreakerVars }
+  // Agency-wallet events
+  | { event: 'CREDIT_DUE_T_MINUS_3'; vars: CreditDueVars }
+  | { event: 'CREDIT_DUE_T_MINUS_1'; vars: CreditDueVars }
+  | { event: 'CREDIT_DUE_TODAY'; vars: CreditDueVars }
+  | { event: 'CREDIT_OVERDUE'; vars: CreditDueVars }
+  | { event: 'INCENTIVE_CREDITED'; vars: IncentiveCreditedVars }
+  | { event: 'DISTRIBUTOR_TRANSFER_IN'; vars: DistributorTransferInVars }
+  | { event: 'MODULE_SWITCHED'; vars: ModuleSwitchedVars }
+  | { event: 'ADJUSTMENT_POSTED'; vars: AdjustmentPostedVars };
 
 /** Render output per channel — what the dispatcher hands to the channel
  *  adapter to deliver. Templates produce these from AlertPayload. */
