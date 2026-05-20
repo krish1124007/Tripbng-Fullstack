@@ -119,6 +119,12 @@ const NAV: NavGroup[] = [
       { href: '/fare-rules', label: 'Fare rules', icon: Receipt, permission: 'fare-rule:read' },
       { href: '/policies', label: 'Policies', icon: Tags, permission: 'policy:read' },
       {
+        href: '/policies/map-policies',
+        label: 'Map policies',
+        icon: Tags,
+        permission: 'policy:read',
+      },
+      {
         href: '/admin/holidays/packages',
         label: 'Holiday packages',
         icon: TreePalm,
