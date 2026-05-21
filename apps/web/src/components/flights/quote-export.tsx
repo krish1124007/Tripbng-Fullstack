@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
+import { toast } from 'sonner';
 import {
   Button,
   Dialog,
@@ -96,7 +97,7 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
     } catch (e) {
       console.error('PNG export failed', e);
       setState({ kind: 'idle' });
-      alert('Could not generate the image. Please try again.');
+      toast.error('Could not generate the image. Please try again.');
     }
   }
 
@@ -124,7 +125,7 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
     } catch (e) {
       console.error('PDF export failed', e);
       setState({ kind: 'idle' });
-      alert('Could not generate the PDF. Please try again.');
+      toast.error('Could not generate the PDF. Please try again.');
     }
   }
 
@@ -143,8 +144,8 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
     } catch (e) {
       console.error('Copy image failed', e);
       setState({ kind: 'idle' });
-      alert(
-        'Your browser does not allow copying images directly. Try the "Download image" option instead.',
+      toast.error(
+        'Your browser doesn\'t allow copying images directly. Try the "Download image" option instead.',
       );
     }
   }

@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import type { PublicSupplierSource } from '@tripbng/shared';
 import {
   Button,
+  ConfirmDialog,
   DataTable,
   Input,
   PageHeader,
@@ -41,6 +42,7 @@ export default function MapSourcesPage() {
   const [productType, setProductType] = useState<ProductFilter>('FLIGHT');
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<PublicSupplierSource | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PublicSupplierSource | null>(null);
 
   // Build the query payload only with values the API expects. Empty-string
   // sentinels stay client-side.
@@ -159,16 +161,7 @@ export default function MapSourcesPage() {
             <button
               type="button"
               className="text-danger hover:underline"
-              onClick={() => {
-                if (
-                  // eslint-disable-next-line no-alert
-                  window.confirm(
-                    `Delete Map Source "${row.original.name ?? row.original.supplierName}"? This cannot be undone.`,
-                  )
-                ) {
-                  remove.mutate({ id: row.original.id });
-                }
-              }}
+              onClick={() => setDeleteTarget(row.original)}
             >
               Delete
             </button>
@@ -304,6 +297,23 @@ export default function MapSourcesPage() {
           if (!o) setEditTarget(null);
         }}
         target={editTarget}
+      />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+        title="Delete Map Source?"
+        description={
+          deleteTarget
+            ? `"${deleteTarget.name ?? deleteTarget.supplierName ?? 'this Map Source'}" will be removed. This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={async () => {
+          if (deleteTarget) await remove.mutateAsync({ id: deleteTarget.id });
+        }}
       />
     </div>
   );

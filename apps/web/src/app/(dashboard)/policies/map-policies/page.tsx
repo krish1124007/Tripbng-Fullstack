@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import type { PublicMapPolicy } from '@tripbng/shared';
 import {
   Button,
+  ConfirmDialog,
   DataTable,
   Input,
   PageHeader,
@@ -51,6 +52,7 @@ export default function MapPoliciesPage() {
   const [productType, setProductType] = useState<ProductFilter>('FLIGHT');
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<PublicMapPolicy | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PublicMapPolicy | null>(null);
 
   const query = useMemo(() => {
     const out: Record<string, string> = {};
@@ -178,16 +180,7 @@ export default function MapPoliciesPage() {
             <button
               type="button"
               className="text-danger hover:underline"
-              onClick={() => {
-                if (
-                  // eslint-disable-next-line no-alert
-                  window.confirm(
-                    `Delete Map Policy "${row.original.name}"? This cannot be undone.`,
-                  )
-                ) {
-                  remove.mutate({ id: row.original.id });
-                }
-              }}
+              onClick={() => setDeleteTarget(row.original)}
             >
               Delete
             </button>
@@ -304,6 +297,23 @@ export default function MapPoliciesPage() {
           if (!o) setEditTarget(null);
         }}
         target={editTarget}
+      />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+        title="Delete Map Policy?"
+        description={
+          deleteTarget
+            ? `"${deleteTarget.name}" will be removed. This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={async () => {
+          if (deleteTarget) await remove.mutateAsync({ id: deleteTarget.id });
+        }}
       />
     </div>
   );
