@@ -46,6 +46,12 @@ import {
   form26QToCsv,
   runForm26QExport,
 } from '../services/tax/form-26q.service.js';
+import { buildForm16A, form16AToPdf } from '../services/tax/form-16a.service.js';
+import { SettlementBatch } from '../models/SettlementBatch.js';
+import { parseSettlementCsv } from '../services/payment/settlement-csv-parser.service.js';
+import { reconcileBatch } from '../services/payment/reconciliation.service.js';
+import { PAYMENT_PROVIDER } from '../models/PaymentTransaction.js';
+import { Types } from 'mongoose';
 
 export const adminAgencyRouter: RouterT = Router();
 
@@ -658,6 +664,218 @@ adminAgencyRouter.get(
         return;
       }
       return ok(res, report);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/reports/form-16a?fy=2025-26&quarter=Q1&agencyId=…&format=json|pdf
+//   Per-agency TDS certificate. JSON for inspection / debug; PDF is the
+//   canonical artefact sent to the agency. Throws NOT_FOUND when the
+//   selected (agency, quarter) has zero deductions — generating a blank
+//   16A would mislead the deductee into filing it as "no income".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Form16AQuerySchema = z.object({
+  fy: z.string().regex(/^\d{4}-\d{2}$/, { message: 'fy must look like 2025-26' }),
+  quarter: z.enum(['Q1', 'Q2', 'Q3', 'Q4']),
+  agencyId: z.string().regex(/^[a-f0-9]{24}$/i, { message: 'agencyId must be a 24-char ObjectId' }),
+  format: z.enum(['json', 'pdf']).default('json'),
+});
+
+adminAgencyRouter.get(
+  '/reports/form-16a',
+  validate(Form16AQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const query = req.query as unknown as ReturnType<typeof Form16AQuerySchema.parse>;
+      const cert = await buildForm16A({
+        tenantId: req.auth!.tenantId,
+        agencyId: query.agencyId,
+        financialYear: query.fy,
+        quarter: query.quarter,
+      });
+      if (query.format === 'pdf') {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="form-16a-${cert.deductee.agencyCode}-${query.fy}-${query.quarter}.pdf"`,
+        );
+        form16AToPdf(cert).pipe(res);
+        return;
+      }
+      return ok(res, cert);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settlement-batch admin endpoints. The CSV body lives in JSON because the
+// Express body parser is already configured for 5MB JSON payloads — a
+// settlement CSV is typically <500KB even with thousands of rows, so no
+// multer / multipart is needed. The trade-off is base64-style hex-bloat is
+// avoided since CSV is plain text.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SettlementUploadBodySchema = z.object({
+  providerCode: z.enum(PAYMENT_PROVIDER),
+  /** YYYY-MM-DD — the gateway's batch date. The batch ID is keyed on
+   *  (tenantId, providerCode, batchDate) so re-uploading the same date
+   *  overwrites the prior attempt (idempotent retry). */
+  batchDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** CSV file content as a string. The frontend reads the file via
+   *  FileReader.readAsText before posting. */
+  csvText: z.string().min(1).max(5_000_000), // 5 MB cap
+  csvFilename: z.string().max(256).optional(),
+  notes: z.string().max(1000).optional(),
+});
+
+adminAgencyRouter.post(
+  '/settlement-batches',
+  validate(SettlementUploadBodySchema),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const body = req.body as ReturnType<typeof SettlementUploadBodySchema.parse>;
+      const tenantObjectId = new Types.ObjectId(req.auth!.tenantId);
+
+      // 1. Parse the CSV up front so a malformed file fails fast with a
+      //    400 — no half-created batch row left behind.
+      const parsed = parseSettlementCsv(body.csvText, body.providerCode);
+      if (parsed.errors.length > 0) {
+        return res.status(400).json({
+          ok: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'CSV parse failed — see `parseErrors` for line-level detail.',
+            parseErrors: parsed.errors.slice(0, 50),
+            detectedHeaders: parsed.detectedHeaders,
+          },
+        });
+      }
+
+      // 2. Upsert the SettlementBatch row. The unique index on
+      //    (tenantId, providerCode, batchDate) ensures the second upload of
+      //    the same day overwrites cleanly without duplicate rows.
+      const batchDate = new Date(`${body.batchDate}T00:00:00.000Z`);
+      const grossTotal = parsed.rows
+        .filter((r) => r.status === 'SUCCESS')
+        .reduce((s, r) => s + r.amount, 0);
+      const mdrTotal = parsed.rows.reduce((s, r) => s + (r.mdrAmount ?? 0), 0);
+      const gstTotal = parsed.rows.reduce((s, r) => s + (r.gstOnMdr ?? 0), 0);
+
+      const batch = await SettlementBatch.findOneAndUpdate(
+        {
+          tenantId: tenantObjectId,
+          providerCode: body.providerCode,
+          batchDate,
+        },
+        {
+          $set: {
+            status: 'RECEIVED',
+            expectedTransactionCount: parsed.rows.length,
+            totalGrossAmount: grossTotal,
+            totalMdrAmount: mdrTotal,
+            totalGstAmount: gstTotal,
+            totalNetAmount: grossTotal - mdrTotal - gstTotal,
+            csvFilename: body.csvFilename ?? null,
+            uploadedByUserId: new Types.ObjectId(req.auth!.userId),
+            notes: body.notes ?? null,
+            // Reset discrepancies — reconciliation below will repopulate.
+            discrepancies: [],
+            reconciledCount: 0,
+            discrepancyCount: 0,
+            reconciledAt: null,
+          },
+          $setOnInsert: { tenantId: tenantObjectId },
+        },
+        { new: true, upsert: true },
+      );
+
+      // 3. Run reconciliation synchronously. The matcher is bounded by row
+      //    count + per-row DB lookups; a 1000-row batch typically resolves
+      //    in 2-3s. Larger files (>5000 rows) should be migrated to a
+      //    background queue — not currently a real-world need.
+      const report = await reconcileBatch(batch._id, parsed.rows);
+
+      return ok(res, {
+        parsedRowCount: parsed.rows.length,
+        detectedHeaders: parsed.detectedHeaders,
+        ...report,
+        // Spread happens before this final override so the explicit batchId
+        // wins over the report's stringified hex (they're equal anyway, but
+        // the explicit shape keeps the API contract grep-able).
+        batchId: batch._id.toHexString(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const SettlementListQuerySchema = z.object({
+  providerCode: z.enum(PAYMENT_PROVIDER).optional(),
+  status: z.enum(['EXPECTED', 'RECEIVED', 'RECONCILED', 'DISCREPANT']).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  skip: z.coerce.number().int().min(0).default(0),
+});
+
+adminAgencyRouter.get(
+  '/settlement-batches',
+  validate(SettlementListQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const query = req.query as unknown as ReturnType<typeof SettlementListQuerySchema.parse>;
+      const filter: Record<string, unknown> = {
+        tenantId: new Types.ObjectId(req.auth!.tenantId),
+      };
+      if (query.providerCode) filter.providerCode = query.providerCode;
+      if (query.status) filter.status = query.status;
+      if (query.from || query.to) {
+        const range: Record<string, Date> = {};
+        if (query.from) range.$gte = new Date(`${query.from}T00:00:00.000Z`);
+        if (query.to) range.$lte = new Date(`${query.to}T23:59:59.999Z`);
+        filter.batchDate = range;
+      }
+
+      const [rows, total] = await Promise.all([
+        SettlementBatch.find(filter)
+          .select('-discrepancies') // list view drops the heavy payload
+          .sort({ batchDate: -1, createdAt: -1 })
+          .skip(query.skip)
+          .limit(query.limit)
+          .lean(),
+        SettlementBatch.countDocuments(filter),
+      ]);
+
+      return ok(res, { rows, total, limit: query.limit, skip: query.skip });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+adminAgencyRouter.get(
+  '/settlement-batches/:id',
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const id = req.params.id;
+      if (!Types.ObjectId.isValid(id)) throw new AppError('VALIDATION_ERROR', { reason: 'bad id' });
+      const batch = await SettlementBatch.findOne({
+        _id: new Types.ObjectId(id),
+        tenantId: new Types.ObjectId(req.auth!.tenantId),
+      }).lean();
+      if (!batch) throw new AppError('NOT_FOUND');
+      return ok(res, batch);
     } catch (err) {
       next(err);
     }

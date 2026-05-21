@@ -101,6 +101,9 @@ export interface Form26QRow {
    *  can chase a row to the ledger. Not part of the NSDL spec; the CSV
    *  exporter drops it but the JSON view includes it. */
   ledgerTxnId: string;
+  /** Deductee's internal agency id — drives the per-row "Generate Form
+   *  16A" link in the admin UI. Not part of the NSDL spec. */
+  agencyId: string;
 }
 
 export interface Form26QWarning {
@@ -296,6 +299,7 @@ export async function runForm26QExport(opts: Form26QOptions): Promise<Form26QRep
       dateOfTaxDeduction: isoDate,
       reasonForNonDeduction: '',
       ledgerTxnId: tds.txnId ?? String(tds._id),
+      agencyId,
     });
   }
 

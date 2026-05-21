@@ -45,9 +45,22 @@ const SettlementBatchSchema = new Schema(
     },
 
     csvUrl: { type: String, default: null },
+    /** Who triggered the upload — paper-trail for the admin audit log. */
+    uploadedByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    /** Original CSV filename — surfaces in the admin UI so ops can confirm
+     *  which file they're looking at without re-downloading. */
+    csvFilename: { type: String, default: null },
     reconciledByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     reconciledAt: { type: Date, default: null },
     notes: { type: String, default: null },
+
+    /** Persisted discrepancies from the most recent reconciliation pass.
+     *  Mirrors `DiscrepancyRow` in services/payment/reconciliation.service.ts.
+     *  Stored as Mixed because the row shape is union-typed (different
+     *  fields populated per `kind`) — Mongoose's schema enums on subdocs
+     *  trip on optional fields, and we already validate at the service
+     *  layer before persisting. */
+    discrepancies: { type: [Schema.Types.Mixed], default: [] },
   },
   { timestamps: true },
 );

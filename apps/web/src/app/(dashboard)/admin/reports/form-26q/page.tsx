@@ -13,7 +13,7 @@
 // filable. We show them prominently rather than silently dropping rows.
 
 import { useMemo, useState } from 'react';
-import { AlertOctagon, FileSpreadsheet, Receipt, Shield } from 'lucide-react';
+import { AlertOctagon, FileDown, FileSpreadsheet, Receipt, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Button,
@@ -49,6 +49,12 @@ interface Form26QRow {
   dateOfTaxDeduction: string;
   reasonForNonDeduction: string;
   ledgerTxnId: string;
+  /** Set when the row aggregator carries the agency id so the UI can
+   *  surface a per-deductee Form 16A download. The 26Q export keeps each
+   *  row 1:1 with a ledger entry, but the same agency can appear across
+   *  multiple rows — we group on the client below for the certificate
+   *  list rather than producing N download buttons. */
+  agencyId?: string;
 }
 
 interface Form26QWarning {
@@ -110,6 +116,7 @@ export default function Form26QPage() {
   const [fy, setFy] = useState(currentFy());
   const [quarter, setQuarter] = useState<Quarter>(currentQuarter());
   const [downloading, setDownloading] = useState(false);
+  const [downloadingCertId, setDownloadingCertId] = useState<string | null>(null);
 
   // Build a small list of selectable FYs — current year + the prior two.
   const fyOptions = useMemo(() => {
@@ -143,6 +150,58 @@ export default function Form26QPage() {
       setDownloading(false);
     }
   };
+
+  // Generate per-deductee Form 16A certificate. The endpoint returns a PDF
+  // stream; the agency-code component of the filename keeps multiple
+  // certificates from clobbering each other in the user's downloads folder.
+  const downloadCertificate = async (agencyId: string, agencyCode: string) => {
+    setDownloadingCertId(agencyId);
+    try {
+      const qs = new URLSearchParams({ fy, quarter, agencyId, format: 'pdf' });
+      await downloadAuthenticatedFile(
+        `/api/v1/admin/reports/form-16a?${qs.toString()}`,
+        `form-16a-${agencyCode}-${fy}-${quarter}.pdf`,
+        accessToken,
+      );
+    } catch (err) {
+      toast.error(err instanceof ApiCallError ? err.message : 'Certificate download failed');
+    } finally {
+      setDownloadingCertId(null);
+    }
+  };
+
+  // Group Annexure rows into per-deductee certificate aggregates. Drives
+  // the "Generate certificates" panel below — one row per agency with the
+  // total TDS for the quarter. We dereference query.data inside the hook
+  // (rather than via the post-early-return `report` const) so the
+  // declaration order survives an early-return reshuffle later.
+  const certificates = useMemo(() => {
+    const data = query.data;
+    if (!data) return [];
+    const byAgency = new Map<
+      string,
+      { agencyId: string; agencyCode: string; name: string; tdsPaise: number; rowCount: number }
+    >();
+    for (const r of data.rows) {
+      if (!r.agencyId) continue;
+      const existing = byAgency.get(r.agencyId);
+      if (existing) {
+        existing.tdsPaise += r.tdsAmountPaise;
+        existing.rowCount++;
+      } else {
+        byAgency.set(r.agencyId, {
+          agencyId: r.agencyId,
+          // PAN of deductee is unique per agency; fall back to the leading
+          // letters of the name as a stable filename hint.
+          agencyCode: r.panOfDeductee || r.nameOfDeductee.slice(0, 8).replace(/\s+/g, '_'),
+          name: r.nameOfDeductee,
+          tdsPaise: r.tdsAmountPaise,
+          rowCount: 1,
+        });
+      }
+    }
+    return Array.from(byAgency.values()).sort((a, b) => b.tdsPaise - a.tdsPaise);
+  }, [query.data]);
 
   if (me?.role !== 'SUPER_ADMIN') {
     return (
@@ -290,6 +349,65 @@ export default function Form26QPage() {
               ))}
             </ul>
           </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Per-deductee Form 16A certificates */}
+      {report && certificates.length > 0 ? (
+        <Card className="overflow-hidden p-0">
+          <div className="flex items-center justify-between border-b bg-surface-2/40 px-4 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-ink-1">
+                Form 16A certificates
+              </h3>
+              <p className="text-xs text-ink-3">
+                Per-deductee TDS certificate (PDF). The accountant fills in the BSR
+                code + challan details before issuing to the agency.
+              </p>
+            </div>
+            <span className="text-xs text-ink-3">
+              {certificates.length} deductee{certificates.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-surface-1 text-xs font-semibold uppercase tracking-wider text-ink-3">
+                <tr>
+                  <th className="px-4 py-2 text-left">Deductee</th>
+                  <th className="px-4 py-2 text-right">Deductions</th>
+                  <th className="px-4 py-2 text-right">Total TDS</th>
+                  <th className="px-4 py-2 text-right">Certificate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {certificates.map((c) => (
+                  <tr
+                    key={c.agencyId}
+                    className="border-b transition-colors last:border-b-0 hover:bg-surface-2/40"
+                  >
+                    <td className="px-4 py-2 text-ink-1">{c.name}</td>
+                    <td className="px-4 py-2 text-right font-mono tabular-nums text-ink-3">
+                      {c.rowCount}
+                    </td>
+                    <td className="px-4 py-2 text-right font-mono tabular-nums text-warning">
+                      {formatPaiseAsINR(c.tdsPaise, { compact: true })}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => downloadCertificate(c.agencyId, c.agencyCode)}
+                        loading={downloadingCertId === c.agencyId}
+                      >
+                        <FileDown className="h-4 w-4" />
+                        Form 16A PDF
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
       ) : null}
 

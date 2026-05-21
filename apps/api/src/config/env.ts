@@ -254,6 +254,16 @@ const EnvSchema = z.object({
     .default('TripBNG / Tankar Solutions Pvt Ltd — set TRIPBNG_ADDRESS'),
   /** Bill-from PAN (printed alongside GSTIN). */
   TRIPBNG_PAN: z.string().default(''),
+  /** Deductor's Tax-deduction Account Number — printed on Form 16A. The
+   *  same TAN underwrites every quarterly Form 26Q. Production MUST
+   *  override; the placeholder shows up obviously-fake in logs. */
+  TRIPBNG_TAN: z.string().default('MUMT00000A'),
+  /** Officer name on the Form 16A signature block (deductor side). */
+  TRIPBNG_DEDUCTOR_OFFICER_NAME: z
+    .string()
+    .default('Authorised Signatory'),
+  /** Officer designation on the Form 16A signature block. */
+  TRIPBNG_DEDUCTOR_OFFICER_DESIGNATION: z.string().default('Finance Controller'),
   /** Effective GST rate on TripBNG service charges (basis points,
    *  default 1800 = 18%). */
   TRIPBNG_SERVICE_GST_BP: z.coerce.number().int().min(0).max(10_000).default(1800),

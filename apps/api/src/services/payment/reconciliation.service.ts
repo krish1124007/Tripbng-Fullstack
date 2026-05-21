@@ -131,6 +131,11 @@ export async function reconcileBatch(
     batch.discrepancyCount = report.discrepancyCount;
     batch.status = report.discrepancyCount === 0 ? 'RECONCILED' : 'DISCREPANT';
     batch.reconciledAt = new Date();
+    // Persist the discrepancy detail so the admin UI can drill in without
+    // re-running reconciliation. Capped at 500 rows — beyond that, ops uses
+    // the CSV export. Larger persisted arrays make the batch list query
+    // unnecessarily heavy.
+    batch.discrepancies = report.discrepancies.slice(0, 500);
     await batch.save();
   });
 
