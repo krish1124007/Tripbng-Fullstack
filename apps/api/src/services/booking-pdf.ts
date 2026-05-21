@@ -27,6 +27,19 @@ import type { BookingDoc } from '../models/Booking.js';
 import type { HotelBookingDoc } from '../models/HotelBooking.js';
 import type { HolidayBookingDoc } from '../models/HolidayBooking.js';
 import type { VisaBookingDoc } from '../models/VisaBooking.js';
+import {
+  PAGE as THEME_PAGE,
+  drawPremiumHeader,
+  drawStatusPills,
+  drawPartyBlock,
+  drawItineraryCard,
+  drawPeopleList,
+  drawSummaryRows,
+  drawTotalCard,
+  drawFooter as drawThemeFooter,
+  drawCancelledWatermark,
+  fmtDateLong as themeFmtDateLong,
+} from './pdf-theme.js';
 
 const PAGE_W = 595;
 const PAGE_H = 842;
@@ -1160,427 +1173,454 @@ function paxTypeCode(type: string): string {
   }
 }
 
-// ────────── Invoice (kept from prior version, unchanged) ──────────
+// ────────────────────────────────────────────────────────────────────────────
+// Themed invoice PDFs — flight (legacy stub), hotel, holiday, visa.
+//
+// All four follow an identical story arc that mirrors the e-ticket aesthetic:
+//   1. Brand-deep premium header (logo, wordmark, product label, booking ref)
+//   2. Status pills (PAID / CANCELLED / CONFIRMED)
+//   3. Bill-from / Bill-to two-column block
+//   4. Product itinerary card (route / hotel / package / visa)
+//   5. People list (passengers / guests / travellers / applicants)
+//   6. Summary rows + premium total card
+//   7. Slim brand-deep footer
+//
+// PDF chrome lives in ./pdf-theme.ts so the structured FlightInvoice +
+// BusInvoice renderers (`services/flight/invoice-pdf.ts`, `services/bus/
+// invoice-pdf.ts`) can share the same look.
+// ────────────────────────────────────────────────────────────────────────────
 
-export function generateInvoicePdf(booking: BookingDoc): Readable {
-  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
-  const stream = doc as unknown as Readable;
-
-  doc.fontSize(20).fillColor(C.ink1).text('Tax Invoice', 48, 48);
-  doc.fontSize(10).fillColor(C.ink3).text('Computer-generated, no signature required', 48, 72);
-
-  doc.moveDown(1.2);
-  doc.fillColor(C.ink1).fontSize(11).text(`Invoice for ${booking.bookingCode}`, 48);
-  doc.fontSize(10).fillColor(C.ink3);
-  doc.text(`Issued: ${fmtDateTime(booking.ticketedAt ?? booking.createdAt)}`);
-  doc.text(`Booking PNR: ${booking.pnr ?? '—'}`);
-
-  doc.moveDown(0.8);
-  doc.fillColor(C.ink2).fontSize(10).text('BILLED TO');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(10).text(booking.agencyName);
-  doc.fillColor(C.ink3).fontSize(9).text(booking.agencyCode);
-
-  if (booking.gst?.number) {
-    doc.moveDown(0.4);
-    doc.fillColor(C.ink2).fontSize(10).text('GST DETAILS');
-    doc.fillColor(C.ink1).fontSize(10).text(`GSTIN: ${booking.gst.number}`);
-    doc.text(`Company: ${booking.gst.companyName}`);
-    doc.text(`Address: ${booking.gst.address}`);
+function commonStatusPills(
+  status: string,
+  paymentStatus: string | null | undefined,
+): Array<{ label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' | 'accent' }> {
+  const out: Array<{ label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' | 'accent' }> = [];
+  if (status === 'CANCELLED') {
+    out.push({ label: 'CANCELLED', tone: 'danger' });
+  } else if (status === 'TICKETED' || status === 'CONFIRMED') {
+    out.push({ label: status, tone: 'success' });
+  } else {
+    out.push({ label: status, tone: 'neutral' });
   }
-
-  doc.moveDown(0.8);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.6);
-
-  doc.fillColor(C.ink2).fontSize(10).text('SUMMARY');
-  doc.moveDown(0.3);
-  doc.fillColor(C.ink1).fontSize(10);
-  const rows: [string, number][] = [
-    ['Base fare', booking.pricing?.baseFarePaise ?? 0],
-    ['Taxes (supplier)', booking.pricing?.taxesPaise ?? 0],
-    ['Policy adjustment', booking.pricing?.policyAdjustmentPaise ?? 0],
-    ['Platform markup', booking.pricing?.platformMarkupPaise ?? 0],
-    ['Distributor markup', booking.pricing?.distributorMarkupPaise ?? 0],
-    ['Agency markup', booking.pricing?.agencyMarkupPaise ?? 0],
-    ['Discount', -(booking.pricing?.discountPaise ?? 0)],
-    ['GST', booking.pricing?.gstPaise ?? 0],
-  ];
-  for (const [label, value] of rows) {
-    if (value === 0) continue;
-    doc.text(label, 48, doc.y, { continued: true });
-    doc.text(rupees(Math.abs(value)) + (value < 0 ? ' (cr)' : ''), { align: 'right' });
-  }
-
-  doc.moveDown(0.4);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.4);
-
-  doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
-  doc.text(rupees(booking.pricing?.agencyPayablePaise ?? 0), { align: 'right' });
-
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(i);
-    doc
-      .fillColor(C.ink3)
-      .fontSize(8)
-      .text(`Page ${i + 1} of ${range.count} · TripBng`, 48, 800, { align: 'center', width: 499 });
-  }
-  doc.end();
-  return stream;
+  if (paymentStatus === 'PAID') out.push({ label: 'PAID', tone: 'success' });
+  else if (paymentStatus === 'REFUNDED') out.push({ label: 'REFUNDED', tone: 'accent' });
+  else if (paymentStatus) out.push({ label: paymentStatus, tone: 'warning' });
+  return out;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Hotel invoice PDF — mirrors generateInvoicePdf() above but reads from
-// HotelBookingDoc. Pdfkit-based, no Chromium. Mock supplier owns the
-// voucher so we issue the invoice off the booking row directly; once
-// a real HotelInvoice model lands (with sequential GST numbers etc.),
-// this falls back the same way the flight invoice route does.
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function generateHotelInvoicePdf(booking: HotelBookingDoc): Readable {
-  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
+// Flight invoice — legacy stub used when no structured FlightInvoice
+// exists yet. Pulls a tax-friendly receipt straight off the booking
+// snapshot.
+export function generateInvoicePdf(booking: BookingDoc): Readable {
+  const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
-  doc.fontSize(20).fillColor(C.ink1).text('Tax Invoice — Hotel', 48, 48);
-  doc.fontSize(10).fillColor(C.ink3).text('Computer-generated, no signature required', 48, 72);
+  if (booking.status === 'CANCELLED') drawCancelledWatermark(doc);
 
-  doc.moveDown(1.2);
-  const code = booking.bookingCode ?? String(booking._id);
-  doc.fillColor(C.ink1).fontSize(11).text(`Invoice for ${code}`, 48);
-  doc.fontSize(10).fillColor(C.ink3);
-  doc.text(`Issued: ${fmtDateTime(booking.vouchredAt ?? booking.confirmedAt ?? booking.createdAt)}`);
-  doc.text(`Confirmation: ${booking.supplierRefs?.confirmationNo ?? '—'}`);
+  let y = drawPremiumHeader(doc, {
+    product: 'FLIGHT',
+    title: 'TAX INVOICE',
+    bookingCode: booking.bookingCode,
+    reference: booking.pnr ? { label: 'PNR', value: booking.pnr } : null,
+    issuedAt: booking.ticketedAt ?? booking.createdAt,
+  });
 
-  doc.moveDown(0.6);
-  doc.fillColor(C.ink2).fontSize(10).text('PROPERTY');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(10).text(booking.hotel?.name ?? '—');
-  doc.fillColor(C.ink3).fontSize(9).text(booking.hotel?.address ?? '');
-  if (booking.hotel?.starRating) {
-    doc.text(`${booking.hotel.starRating}-star`);
-  }
+  y = drawStatusPills(doc, y, commonStatusPills(booking.status, booking.paymentStatus));
 
-  doc.moveDown(0.6);
-  doc.fillColor(C.ink2).fontSize(10).text('STAY');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(10);
-  doc.text(`Check-in:  ${fmtDateTime(booking.checkIn)}`);
-  doc.text(`Check-out: ${fmtDateTime(booking.checkOut)}`);
-  doc.text(`Nights:    ${booking.nights}`);
-  if ((booking.rooms ?? []).length > 0) {
-    const r0 = booking.rooms[0]!;
-    doc.text(
-      `Room:      ${r0.name ?? 'Standard'} · ${r0.adults} adult${r0.adults === 1 ? '' : 's'}${
-        (r0.children ?? 0) > 0 ? ` + ${r0.children} child` : ''
-      }${r0.mealPlan ? ` · ${r0.mealPlan}` : ''}`,
+  const colW = (THEME_PAGE.CONTENT_W - 24) / 2;
+  drawPartyBlock(doc, THEME_PAGE.PAD_X, y, colW, 'BILL FROM', {
+    name: 'TripBng Travel Pvt Ltd',
+    address: 'Mumbai, Maharashtra, India',
+    state: 'Maharashtra',
+    stateCode: 27,
+  });
+  drawPartyBlock(doc, THEME_PAGE.PAD_X + colW + 24, y, colW, 'BILL TO', {
+    name: booking.agencyName,
+    address: booking.agencyCode,
+    gstin: booking.gst?.number,
+    email: booking.contact?.email,
+    mobile: booking.contact?.mobile
+      ? `${booking.contact.countryCode ?? '+91'} ${booking.contact.mobile}`
+      : null,
+  });
+  y += 138;
+
+  // Itinerary card — first + last segment in mono with travel date chip.
+  const firstSeg = booking.segments?.[0];
+  const lastSeg = booking.segments?.[booking.segments.length - 1];
+  const route = firstSeg && lastSeg
+    ? `${firstSeg.origin?.code ?? '?'} -> ${lastSeg.destination?.code ?? '?'}`
+    : booking.sector;
+  y = drawItineraryCard(doc, y, {
+    glyph: 'flight',
+    title: route,
+    subtitle: firstSeg
+      ? `${firstSeg.airline?.name ?? firstSeg.airline?.code ?? ''}  ·  ${booking.tripType}  ·  ${booking.travelClass}`
+      : booking.travelClass,
+    chip: booking.tripType === 'ROUNDTRIP' ? 'ROUNDTRIP' : null,
+    cells: [
+      { label: 'Travel', value: themeFmtDateLong(new Date(booking.travelDate)) },
+      {
+        label: 'Pax',
+        value: `${booking.passengers?.length ?? 0} traveller${(booking.passengers?.length ?? 0) === 1 ? '' : 's'}`,
+      },
+      ...(firstSeg
+        ? [
+            { label: 'Flight', value: `${firstSeg.airline?.code ?? ''} ${firstSeg.flightNumber ?? ''}`.trim() },
+            { label: 'Class', value: booking.travelClass },
+          ]
+        : []),
+    ],
+  });
+
+  // Passengers list.
+  if ((booking.passengers ?? []).length > 0) {
+    y = drawPeopleList(
+      doc,
+      y,
+      'PASSENGERS',
+      (booking.passengers ?? []).map((p, i) => ({
+        title: p.title ?? null,
+        firstName: p.firstName ?? null,
+        lastName: p.lastName ?? null,
+        meta: `${paxTypeCode(p.type ?? 'ADULT')} · ${p.fareCategory ?? 'REGULAR'}`,
+        ref: p.ticketNumber ?? null,
+      })),
     );
   }
 
-  if ((booking.guests ?? []).length > 0) {
-    doc.moveDown(0.6);
-    doc.fillColor(C.ink2).fontSize(10).text('GUESTS');
-    doc.moveDown(0.2);
-    doc.fillColor(C.ink1).fontSize(10);
-    for (const g of booking.guests ?? []) {
-      doc.text(`${g.title ?? ''} ${g.firstName ?? ''} ${g.lastName ?? ''}`.trim());
-    }
-  }
+  // Summary rows.
+  y = drawSummaryRows(doc, y, [
+    { label: 'Base fare', paise: booking.pricing?.baseFarePaise ?? 0 },
+    { label: 'Taxes (supplier)', paise: booking.pricing?.taxesPaise ?? 0 },
+    { label: 'Policy adjustment', paise: booking.pricing?.policyAdjustmentPaise ?? 0 },
+    { label: 'Platform markup', paise: booking.pricing?.platformMarkupPaise ?? 0 },
+    { label: 'Distributor markup', paise: booking.pricing?.distributorMarkupPaise ?? 0 },
+    { label: 'Agency markup', paise: booking.pricing?.agencyMarkupPaise ?? 0 },
+    {
+      label: 'Discount',
+      paise: -(booking.pricing?.discountPaise ?? 0),
+      credit: (booking.pricing?.discountPaise ?? 0) > 0,
+    },
+    { label: 'GST', paise: booking.pricing?.gstPaise ?? 0 },
+  ]);
 
-  if (booking.gst?.gstin) {
-    doc.moveDown(0.6);
-    doc.fillColor(C.ink2).fontSize(10).text('GST DETAILS');
-    doc.fillColor(C.ink1).fontSize(10).text(`GSTIN: ${booking.gst.gstin}`);
-    if (booking.gst.companyName) doc.text(`Company: ${booking.gst.companyName}`);
-    if (booking.gst.companyAddress) doc.text(`Address: ${booking.gst.companyAddress}`);
-  }
+  y = drawTotalCard(doc, y, 'Total payable', booking.pricing?.agencyPayablePaise ?? 0);
 
-  doc.moveDown(0.8);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.6);
-
-  doc.fillColor(C.ink2).fontSize(10).text('SUMMARY');
-  doc.moveDown(0.3);
-  doc.fillColor(C.ink1).fontSize(10);
-  const perNight = booking.pricing?.perNightPaise ?? 0;
-  const nights = booking.nights;
-  const totalSelling = booking.pricing?.totalSellingPaise ?? 0;
-  const rows: [string, number][] = [
-    [`Room rate × ${nights} night${nights === 1 ? '' : 's'}`, perNight * nights],
-  ];
-  for (const t of booking.taxBreakup ?? []) {
-    if (t.taxAmountPaise > 0) {
-      rows.push([
-        `${t.taxType}${t.taxPercentage ? ` @ ${t.taxPercentage}%` : ''}`,
-        t.taxAmountPaise,
-      ]);
-    }
-  }
-  for (const [label, value] of rows) {
-    if (value === 0) continue;
-    doc.text(label, 48, doc.y, { continued: true });
-    doc.text(rupees(value), { align: 'right' });
-  }
-
-  doc.moveDown(0.4);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.4);
-
-  doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
-  doc.text(rupees(totalSelling), { align: 'right' });
-
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(i);
-    doc
-      .fillColor(C.ink3)
-      .fontSize(8)
-      .text(`Page ${i + 1} of ${range.count} · TripBng`, 48, 800, { align: 'center', width: 499 });
-  }
+  drawThemeFooter(doc, { bookingRef: booking.bookingCode });
   doc.end();
   return stream;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Holiday invoice PDF — itinerary-style invoice for an admin-authored
-// holiday package booking. Mirrors the hotel generator but pulls package
-// title / destination / nights / sharing / pax / departure-date out of the
-// HolidayBooking row instead of the per-night hotel snapshot.
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// Hotel invoice — uses the same chrome with a hotel-flavoured itinerary
+// card. Pulls per-night + tax-breakup rows from the booking snapshot.
+// ────────────────────────────────────────────────────────────────────────────
 
-export function generateHolidayInvoicePdf(booking: HolidayBookingDoc): Readable {
-  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
+export function generateHotelInvoicePdf(booking: HotelBookingDoc): Readable {
+  const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
-  doc.fontSize(20).fillColor(C.ink1).text('Tax Invoice — Holiday', 48, 48);
-  doc.fontSize(10).fillColor(C.ink3).text('Computer-generated, no signature required', 48, 72);
+  if (booking.status === 'CANCELLED') drawCancelledWatermark(doc);
 
-  doc.moveDown(1.2);
   const code = booking.bookingCode ?? String(booking._id);
-  doc.fillColor(C.ink1).fontSize(11).text(`Invoice for ${code}`, 48);
-  doc.fontSize(10).fillColor(C.ink3);
-  doc.text(`Issued: ${fmtDateTime(booking.confirmedAt ?? booking.createdAt)}`);
-  doc.text(`Confirmation: ${booking.supplierRefs?.confirmationNo ?? '—'}`);
+  let y = drawPremiumHeader(doc, {
+    product: 'HOTEL',
+    title: 'TAX INVOICE',
+    bookingCode: code,
+    reference: booking.supplierRefs?.confirmationNo
+      ? { label: 'CONF', value: booking.supplierRefs.confirmationNo }
+      : null,
+    issuedAt: booking.vouchredAt ?? booking.confirmedAt ?? booking.createdAt,
+  });
 
-  doc.moveDown(0.6);
-  doc.fillColor(C.ink2).fontSize(10).text('PACKAGE');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(11).text(booking.packageTitle);
-  doc.fillColor(C.ink3).fontSize(9).text(booking.destination ?? '');
-  if (booking.themeLabel) doc.text(booking.themeLabel);
+  const status = booking.status ?? 'CONFIRMED';
+  y = drawStatusPills(doc, y, commonStatusPills(status, status === 'CANCELLED' ? 'REFUNDED' : 'PAID'));
 
-  doc.moveDown(0.6);
-  doc.fillColor(C.ink2).fontSize(10).text('TRIP');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(10);
-  doc.text(`Departure: ${fmtDateTime(booking.departureDate)}`);
-  doc.text(`Return:    ${fmtDateTime(booking.returnDate)}`);
-  doc.text(`Nights:    ${booking.nights}`);
-  if (booking.departureCity) doc.text(`From:      ${booking.departureCity}`);
-  doc.text(`Sharing:   ${booking.sharingType ?? '—'}`);
-  doc.text(
-    `Pax:       ${booking.adults} adult${booking.adults === 1 ? '' : 's'}${
-      (booking.childrenWithBed ?? 0) > 0
-        ? ` · ${booking.childrenWithBed} child w/ bed`
-        : ''
-    }${
-      (booking.childrenWithoutBed ?? 0) > 0
-        ? ` · ${booking.childrenWithoutBed} child w/o bed`
-        : ''
-    }`,
-  );
+  const colW = (THEME_PAGE.CONTENT_W - 24) / 2;
+  drawPartyBlock(doc, THEME_PAGE.PAD_X, y, colW, 'BILL FROM', {
+    name: 'TripBng Travel Pvt Ltd',
+    address: 'Mumbai, Maharashtra, India',
+    state: 'Maharashtra',
+    stateCode: 27,
+  });
+  drawPartyBlock(doc, THEME_PAGE.PAD_X + colW + 24, y, colW, 'BILL TO', {
+    name: booking.gst?.companyName ?? booking.guests?.[0]
+      ? `${booking.guests?.[0]?.firstName ?? ''} ${booking.guests?.[0]?.lastName ?? ''}`.trim()
+      : 'Guest',
+    address: booking.gst?.companyAddress ?? '',
+    gstin: booking.gst?.gstin,
+  });
+  y += 138;
 
-  if ((booking.travellers ?? []).length > 0) {
-    doc.moveDown(0.6);
-    doc.fillColor(C.ink2).fontSize(10).text('TRAVELLERS');
-    doc.moveDown(0.2);
-    doc.fillColor(C.ink1).fontSize(10);
-    for (const g of booking.travellers ?? []) {
-      doc.text(`${g.title ?? ''} ${g.firstName ?? ''} ${g.lastName ?? ''}`.trim());
+  // Itinerary card — hotel name + stay window + room.
+  const nights = booking.nights;
+  const r0 = booking.rooms?.[0];
+  const room = r0
+    ? `${r0.name ?? 'Standard Room'} · ${r0.adults} adult${r0.adults === 1 ? '' : 's'}${
+        (r0.children ?? 0) > 0 ? ` + ${r0.children} child` : ''
+      }${r0.mealPlan ? ` · ${r0.mealPlan}` : ''}`
+    : '—';
+  y = drawItineraryCard(doc, y, {
+    glyph: 'hotel',
+    title: booking.hotel?.name ?? 'Hotel',
+    subtitle: [booking.hotel?.address, booking.hotel?.starRating ? `${booking.hotel.starRating}-star` : null]
+      .filter(Boolean)
+      .join(' · '),
+    chip: `${nights} NIGHT${nights === 1 ? '' : 'S'}`,
+    cells: [
+      { label: 'Check-in', value: themeFmtDateLong(new Date(booking.checkIn)) },
+      { label: 'Check-out', value: themeFmtDateLong(new Date(booking.checkOut)) },
+      { label: 'Room', value: room },
+      {
+        label: 'Guests',
+        value: `${(booking.guests ?? []).length} guest${(booking.guests ?? []).length === 1 ? '' : 's'}`,
+      },
+    ],
+  });
+
+  if ((booking.guests ?? []).length > 0) {
+    y = drawPeopleList(
+      doc,
+      y,
+      'GUESTS',
+      (booking.guests ?? []).map((g) => ({
+        title: g.title ?? null,
+        firstName: g.firstName ?? null,
+        lastName: g.lastName ?? null,
+        meta: g.isLeadPassenger ? 'Lead guest' : null,
+        ref: null,
+      })),
+    );
+  }
+
+  const perNight = booking.pricing?.perNightPaise ?? 0;
+  const summaryRows: Array<{ label: string; paise: number }> = [
+    { label: `Room rate × ${nights} night${nights === 1 ? '' : 's'}`, paise: perNight * nights },
+  ];
+  for (const t of booking.taxBreakup ?? []) {
+    if (t.taxAmountPaise > 0) {
+      summaryRows.push({
+        label: `${t.taxType}${t.taxPercentage ? ` @ ${t.taxPercentage}%` : ''}`,
+        paise: t.taxAmountPaise,
+      });
     }
   }
+  y = drawSummaryRows(doc, y, summaryRows);
 
-  if (booking.gst?.gstin) {
-    doc.moveDown(0.6);
-    doc.fillColor(C.ink2).fontSize(10).text('GST DETAILS');
-    doc.fillColor(C.ink1).fontSize(10).text(`GSTIN: ${booking.gst.gstin}`);
-    if (booking.gst.companyName) doc.text(`Company: ${booking.gst.companyName}`);
-    if (booking.gst.companyAddress) doc.text(`Address: ${booking.gst.companyAddress}`);
+  y = drawTotalCard(doc, y, 'Total payable', booking.pricing?.totalSellingPaise ?? 0);
+
+  drawThemeFooter(doc, { bookingRef: code });
+  doc.end();
+  return stream;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Holiday invoice — package-style itinerary card, per-pax fare lines.
+// ────────────────────────────────────────────────────────────────────────────
+
+export function generateHolidayInvoicePdf(booking: HolidayBookingDoc): Readable {
+  const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
+  const stream = doc as unknown as Readable;
+
+  if (booking.status === 'CANCELLED') drawCancelledWatermark(doc);
+
+  const code = booking.bookingCode ?? String(booking._id);
+  let y = drawPremiumHeader(doc, {
+    product: 'HOLIDAY',
+    title: 'TAX INVOICE',
+    bookingCode: code,
+    reference: booking.supplierRefs?.confirmationNo
+      ? { label: 'CONF', value: booking.supplierRefs.confirmationNo }
+      : null,
+    issuedAt: booking.confirmedAt ?? booking.createdAt,
+  });
+
+  const status = booking.status ?? 'CONFIRMED';
+  y = drawStatusPills(doc, y, commonStatusPills(status, status === 'CANCELLED' ? 'REFUNDED' : 'PAID'));
+
+  const colW = (THEME_PAGE.CONTENT_W - 24) / 2;
+  drawPartyBlock(doc, THEME_PAGE.PAD_X, y, colW, 'BILL FROM', {
+    name: 'TripBng Travel Pvt Ltd',
+    address: 'Mumbai, Maharashtra, India',
+    state: 'Maharashtra',
+    stateCode: 27,
+  });
+  drawPartyBlock(doc, THEME_PAGE.PAD_X + colW + 24, y, colW, 'BILL TO', {
+    name: booking.gst?.companyName ?? booking.travellers?.[0]
+      ? `${booking.travellers?.[0]?.firstName ?? ''} ${booking.travellers?.[0]?.lastName ?? ''}`.trim()
+      : 'Traveller',
+    address: booking.gst?.companyAddress ?? '',
+    gstin: booking.gst?.gstin,
+  });
+  y += 138;
+
+  const nights = booking.nights;
+  const paxLine = `${booking.adults} adult${booking.adults === 1 ? '' : 's'}${
+    (booking.childrenWithBed ?? 0) > 0 ? ` · ${booking.childrenWithBed} child w/ bed` : ''
+  }${(booking.childrenWithoutBed ?? 0) > 0 ? ` · ${booking.childrenWithoutBed} child w/o bed` : ''}`;
+  y = drawItineraryCard(doc, y, {
+    glyph: 'holiday',
+    title: booking.packageTitle,
+    subtitle: [booking.destination, booking.themeLabel].filter(Boolean).join(' · '),
+    chip: `${nights} NIGHT${nights === 1 ? '' : 'S'}`,
+    cells: [
+      { label: 'Departure', value: themeFmtDateLong(new Date(booking.departureDate)) },
+      { label: 'Return', value: themeFmtDateLong(new Date(booking.returnDate)) },
+      { label: 'Sharing', value: booking.sharingType ?? '—' },
+      { label: 'Pax', value: paxLine },
+    ],
+  });
+
+  if ((booking.travellers ?? []).length > 0) {
+    y = drawPeopleList(
+      doc,
+      y,
+      'TRAVELLERS',
+      (booking.travellers ?? []).map((t) => ({
+        title: t.title ?? null,
+        firstName: t.firstName ?? null,
+        lastName: t.lastName ?? null,
+        meta: t.paxType ? `${t.paxType}` : null,
+        ref: null,
+      })),
+    );
   }
 
-  doc.moveDown(0.8);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.6);
-
-  doc.fillColor(C.ink2).fontSize(10).text('SUMMARY');
-  doc.moveDown(0.3);
-  doc.fillColor(C.ink1).fontSize(10);
-  const rows: [string, number][] = [];
+  const summaryRows: Array<{ label: string; paise: number }> = [];
   if ((booking.adults ?? 0) > 0 && (booking.pricing?.perAdultPaise ?? 0) > 0) {
-    rows.push([
-      `Adult × ${booking.adults} (${booking.sharingType} sharing)`,
-      (booking.pricing!.perAdultPaise ?? 0) * (booking.adults ?? 0),
-    ]);
+    summaryRows.push({
+      label: `Adult × ${booking.adults} (${booking.sharingType} sharing)`,
+      paise: (booking.pricing!.perAdultPaise ?? 0) * (booking.adults ?? 0),
+    });
   }
   if ((booking.childrenWithBed ?? 0) > 0 && (booking.pricing?.perChildBedPaise ?? 0) > 0) {
-    rows.push([
-      `Child w/ bed × ${booking.childrenWithBed}`,
-      (booking.pricing!.perChildBedPaise ?? 0) * (booking.childrenWithBed ?? 0),
-    ]);
+    summaryRows.push({
+      label: `Child w/ bed × ${booking.childrenWithBed}`,
+      paise: (booking.pricing!.perChildBedPaise ?? 0) * (booking.childrenWithBed ?? 0),
+    });
   }
   if (
     (booking.childrenWithoutBed ?? 0) > 0 &&
     (booking.pricing?.perChildNoBedPaise ?? 0) > 0
   ) {
-    rows.push([
-      `Child w/o bed × ${booking.childrenWithoutBed}`,
-      (booking.pricing!.perChildNoBedPaise ?? 0) * (booking.childrenWithoutBed ?? 0),
-    ]);
+    summaryRows.push({
+      label: `Child w/o bed × ${booking.childrenWithoutBed}`,
+      paise: (booking.pricing!.perChildNoBedPaise ?? 0) * (booking.childrenWithoutBed ?? 0),
+    });
   }
   if ((booking.pricing?.gstPaise ?? 0) > 0) {
-    rows.push(['GST', booking.pricing!.gstPaise ?? 0]);
+    summaryRows.push({ label: 'GST', paise: booking.pricing!.gstPaise ?? 0 });
   }
-  for (const [label, value] of rows) {
-    doc.text(label, 48, doc.y, { continued: true });
-    doc.text(rupees(value), { align: 'right' });
-  }
+  y = drawSummaryRows(doc, y, summaryRows);
 
-  doc.moveDown(0.4);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.4);
+  y = drawTotalCard(doc, y, 'Total payable', booking.pricing?.totalPaise ?? 0);
 
-  doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
-  doc.text(rupees(booking.pricing?.totalPaise ?? 0), { align: 'right' });
-
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(i);
-    doc
-      .fillColor(C.ink3)
-      .fontSize(8)
-      .text(`Page ${i + 1} of ${range.count} · TripBng`, 48, 800, { align: 'center', width: 499 });
-  }
+  drawThemeFooter(doc, { bookingRef: code });
   doc.end();
   return stream;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Visa invoice PDF — application-style invoice for a visa booking. Pulls
-// product / country / processing mode / applicants / fee breakdown out of
-// the VisaBooking row. Same pdfkit-A4 template as the other product
-// invoices.
-// ─────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// Visa invoice — application-style itinerary card (country, validity,
+// processing window) + per-applicant fee breakdown.
+// ────────────────────────────────────────────────────────────────────────────
 
 export function generateVisaInvoicePdf(booking: VisaBookingDoc): Readable {
-  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
+  const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
-  doc.fontSize(20).fillColor(C.ink1).text('Tax Invoice — Visa', 48, 48);
-  doc.fontSize(10).fillColor(C.ink3).text('Computer-generated, no signature required', 48, 72);
+  if (booking.status === 'CANCELLED') drawCancelledWatermark(doc);
 
-  doc.moveDown(1.2);
   const code = booking.bookingCode ?? String(booking._id);
-  doc.fillColor(C.ink1).fontSize(11).text(`Invoice for ${code}`, 48);
-  doc.fontSize(10).fillColor(C.ink3);
-  doc.text(`Issued: ${fmtDateTime(booking.confirmedAt ?? booking.createdAt)}`);
-  doc.text(`Application: ${booking.supplierRefs?.applicationNo ?? '—'}`);
+  let y = drawPremiumHeader(doc, {
+    product: 'VISA',
+    title: 'TAX INVOICE',
+    bookingCode: code,
+    reference: booking.supplierRefs?.applicationNo
+      ? { label: 'APP', value: booking.supplierRefs.applicationNo }
+      : null,
+    issuedAt: booking.confirmedAt ?? booking.createdAt,
+  });
 
-  doc.moveDown(0.6);
-  doc.fillColor(C.ink2).fontSize(10).text('PRODUCT');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(11).text(booking.productName);
-  doc
-    .fillColor(C.ink3)
-    .fontSize(9)
-    .text(
-      `${booking.countryName ?? '—'} · ${booking.purpose ?? 'tourist'} · ${
-        booking.processingMode ?? 'e-visa'
-      } · ${booking.entryType ?? 'single'}-entry`,
-    );
+  const status = booking.status ?? 'CONFIRMED';
+  y = drawStatusPills(doc, y, commonStatusPills(status, status === 'CANCELLED' ? 'REFUNDED' : 'PAID'));
 
-  doc.moveDown(0.6);
-  doc.fillColor(C.ink2).fontSize(10).text('VALIDITY');
-  doc.moveDown(0.2);
-  doc.fillColor(C.ink1).fontSize(10);
-  doc.text(`Stay:        up to ${booking.stayDays} days`);
-  doc.text(`Validity:    ${booking.validityDays} days from issue`);
-  doc.text(`Processing:  ${booking.processingDays} working days${booking.urgent ? ' (URGENT)' : ''}`);
-  if (booking.expectedTravelDate) {
-    doc.text(`Expected travel: ${fmtDateTime(booking.expectedTravelDate)}`);
-  }
+  const colW = (THEME_PAGE.CONTENT_W - 24) / 2;
+  drawPartyBlock(doc, THEME_PAGE.PAD_X, y, colW, 'BILL FROM', {
+    name: 'TripBng Travel Pvt Ltd',
+    address: 'Mumbai, Maharashtra, India',
+    state: 'Maharashtra',
+    stateCode: 27,
+  });
+  drawPartyBlock(doc, THEME_PAGE.PAD_X + colW + 24, y, colW, 'BILL TO', {
+    name: booking.gst?.companyName ?? booking.applicants?.[0]
+      ? `${booking.applicants?.[0]?.firstName ?? ''} ${booking.applicants?.[0]?.lastName ?? ''}`.trim()
+      : 'Applicant',
+    address: booking.gst?.companyAddress ?? '',
+    gstin: booking.gst?.gstin,
+  });
+  y += 138;
+
+  const expectedTravel = booking.expectedTravelDate
+    ? themeFmtDateLong(new Date(booking.expectedTravelDate))
+    : '—';
+  y = drawItineraryCard(doc, y, {
+    glyph: 'visa',
+    title: booking.productName,
+    subtitle: `${booking.countryName ?? '—'} · ${booking.purpose ?? 'tourist'} · ${booking.processingMode ?? 'e-visa'} · ${booking.entryType ?? 'single'}-entry`,
+    chip: booking.urgent ? 'URGENT' : null,
+    cells: [
+      { label: 'Stay', value: `Up to ${booking.stayDays} days` },
+      { label: 'Validity', value: `${booking.validityDays} days from issue` },
+      { label: 'Processing', value: `${booking.processingDays} working days` },
+      { label: 'Expected travel', value: expectedTravel },
+    ],
+  });
 
   if ((booking.applicants ?? []).length > 0) {
-    doc.moveDown(0.6);
-    doc.fillColor(C.ink2).fontSize(10).text('APPLICANTS');
-    doc.moveDown(0.2);
-    doc.fillColor(C.ink1).fontSize(10);
-    for (const a of booking.applicants ?? []) {
-      doc.text(
-        `${a.title ?? ''} ${a.firstName ?? ''} ${a.lastName ?? ''}`.trim() +
-          ` · ${a.paxType ?? 'ADT'} · ${a.nationality ?? 'IN'}`,
-      );
-    }
+    y = drawPeopleList(
+      doc,
+      y,
+      'APPLICANTS',
+      (booking.applicants ?? []).map((a) => ({
+        title: a.title ?? null,
+        firstName: a.firstName ?? null,
+        lastName: a.lastName ?? null,
+        meta: [a.paxType ?? 'ADT', a.nationality ?? 'IN'].join(' · '),
+        ref: null,
+      })),
+    );
   }
 
-  if (booking.gst?.gstin) {
-    doc.moveDown(0.6);
-    doc.fillColor(C.ink2).fontSize(10).text('GST DETAILS');
-    doc.fillColor(C.ink1).fontSize(10).text(`GSTIN: ${booking.gst.gstin}`);
-    if (booking.gst.companyName) doc.text(`Company: ${booking.gst.companyName}`);
-    if (booking.gst.companyAddress) doc.text(`Address: ${booking.gst.companyAddress}`);
-  }
-
-  doc.moveDown(0.8);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.6);
-
-  doc.fillColor(C.ink2).fontSize(10).text('SUMMARY');
-  doc.moveDown(0.3);
-  doc.fillColor(C.ink1).fontSize(10);
   const applicantCount = booking.pricing?.applicants ?? (booking.applicants ?? []).length;
-  const rows: [string, number][] = [];
+  const summaryRows: Array<{ label: string; paise: number }> = [];
   if ((booking.pricing?.consulateFeePaise ?? 0) > 0) {
-    rows.push([
-      `Consulate fee × ${applicantCount}`,
-      (booking.pricing!.consulateFeePaise ?? 0) * applicantCount,
-    ]);
+    summaryRows.push({
+      label: `Consulate fee × ${applicantCount}`,
+      paise: (booking.pricing!.consulateFeePaise ?? 0) * applicantCount,
+    });
   }
   if ((booking.pricing?.serviceFeePaise ?? 0) > 0) {
-    rows.push([
-      `Service fee × ${applicantCount}`,
-      (booking.pricing!.serviceFeePaise ?? 0) * applicantCount,
-    ]);
+    summaryRows.push({
+      label: `Service fee × ${applicantCount}`,
+      paise: (booking.pricing!.serviceFeePaise ?? 0) * applicantCount,
+    });
   }
   if ((booking.pricing?.urgentSurchargePaise ?? 0) > 0) {
-    rows.push([
-      `Urgent surcharge × ${applicantCount}`,
-      (booking.pricing!.urgentSurchargePaise ?? 0) * applicantCount,
-    ]);
+    summaryRows.push({
+      label: `Urgent surcharge × ${applicantCount}`,
+      paise: (booking.pricing!.urgentSurchargePaise ?? 0) * applicantCount,
+    });
   }
   if ((booking.pricing?.gstPaise ?? 0) > 0) {
-    rows.push(['GST', booking.pricing!.gstPaise ?? 0]);
+    summaryRows.push({ label: 'GST', paise: booking.pricing!.gstPaise ?? 0 });
   }
-  for (const [label, value] of rows) {
-    doc.text(label, 48, doc.y, { continued: true });
-    doc.text(rupees(value), { align: 'right' });
-  }
+  y = drawSummaryRows(doc, y, summaryRows);
 
-  doc.moveDown(0.4);
-  doc.strokeColor(C.border).lineWidth(0.5).moveTo(48, doc.y).lineTo(547, doc.y).stroke();
-  doc.moveDown(0.4);
+  y = drawTotalCard(doc, y, 'Total payable', booking.pricing?.totalPaise ?? 0);
 
-  doc.fontSize(13).fillColor(C.ink1).text('Total payable', 48, doc.y, { continued: true });
-  doc.text(rupees(booking.pricing?.totalPaise ?? 0), { align: 'right' });
-
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(i);
-    doc
-      .fillColor(C.ink3)
-      .fontSize(8)
-      .text(`Page ${i + 1} of ${range.count} · TripBng`, 48, 800, { align: 'center', width: 499 });
-  }
+  drawThemeFooter(doc, { bookingRef: code });
   doc.end();
   return stream;
 }
