@@ -28,6 +28,7 @@ import {
 } from '@tripbng/shared';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { searchAgencyLimit, bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import {
@@ -119,7 +120,7 @@ const QuoteRequestSchema = z.object({
   destination: z.string().max(120).optional(),
 });
 
-insuranceRouter.post('/quote', gate, validate(QuoteRequestSchema), async (req, res, next) => {
+insuranceRouter.post('/quote', searchAgencyLimit, gate, validate(QuoteRequestSchema), async (req, res, next) => {
   try {
     const out = await fetchQuote(req.body as ReturnType<typeof QuoteRequestSchema.parse>);
     return ok(res, out);
@@ -149,6 +150,7 @@ insuranceRouter.post(
 
 insuranceRouter.post(
   '/issue',
+  bookingAgencyLimit,
   gate,
   validate(InsuranceIssueRequestSchema),
   async (req, res, next) => {

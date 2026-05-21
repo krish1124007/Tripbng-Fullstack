@@ -15,6 +15,7 @@ import { ok } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { requireNotFrozen } from '../middleware/cutover-freeze.js';
+import { topupAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { Agency } from '../models/Agency.js';
 import { Distributor } from '../models/Distributor.js';
 import { TopupRequest } from '../models/TopupRequest.js';
@@ -173,6 +174,7 @@ walletRouter.get('/transactions', validate(WalletQuerySchema, 'query'), async (r
 walletRouter.post(
   '/topup',
   requireNotFrozen('topup'),
+  topupAgencyLimit,
   requirePermission('wallet:topup:request'),
   validate(InitiateTopupRequestSchema),
   async (req, res, next) => {

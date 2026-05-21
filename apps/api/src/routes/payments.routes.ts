@@ -16,6 +16,7 @@ import {
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { requireNotFrozen } from '../middleware/cutover-freeze.js';
+import { topupAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { logger } from '../config/logger.js';
@@ -317,6 +318,7 @@ const gate = requirePermission('search:flights'); // booking-trade gate; no sepa
 paymentsRouter.post(
   '/topups/initiate',
   requireNotFrozen('topup'),
+  topupAgencyLimit,
   gate,
   validate(GatewayInitiateTopupRequestSchema),
   async (req, res, next) => {

@@ -24,6 +24,7 @@ import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
+import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import {
   quoteInsurance,
   quoteVisa,
@@ -178,6 +179,7 @@ const HolidayQuickBookSchema = z.object({
 
 productsRouter.post(
   '/holidays/quick-book',
+  bookingAgencyLimit,
   gate,
   validate(HolidayQuickBookSchema),
   async (req, res, next) => {
@@ -459,6 +461,7 @@ const VisaQuickBookSchema = z.object({
 
 productsRouter.post(
   '/visa/quick-book',
+  bookingAgencyLimit,
   gate,
   validate(VisaQuickBookSchema),
   async (req, res, next) => {
