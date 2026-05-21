@@ -32,17 +32,30 @@ export const DialogContent = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
+    {/*
+      Layout notes:
+      - `max-h-[calc(100vh-2rem)]` keeps the dialog inside the viewport with
+        a 1rem breathing band top + bottom. Without this, tall children make
+        the dialog overflow above/below the screen because it's centered
+        with `-translate-y-1/2`, and DialogBody's own overflow-y-auto only
+        kicks in when the parent has a bounded height.
+      - `flex flex-col` (replacing `grid`) lets `DialogBody`'s `flex-1` claim
+        the remaining height between Header + Footer so it can scroll.
+      - `overflow-hidden` on the shell makes sure only DialogBody scrolls,
+        not the whole shell — keeps the rounded corners + header pinned.
+    */}
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-surface-1 p-6 shadow-elevated',
+        'fixed left-1/2 top-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border bg-surface-1 shadow-elevated',
+        'max-h-[calc(100vh-2rem)]',
         'data-[state=open]:animate-fade-in-up',
         className,
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+      <DialogPrimitive.Close className="absolute right-4 top-4 z-10 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
