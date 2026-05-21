@@ -86,6 +86,13 @@ export function createApp(): Express {
   // Branding logos + future binary assets. Served with long-cache +
   // immutable since every saved file lives at a UUID-suffixed path
   // (no reuse). Dotfiles denied to keep .gitkeep etc. invisible.
+  //
+  // CORP override: helmet's default `Cross-Origin-Resource-Policy:
+  // same-origin` blocks <img src="..."> from web (3002) loading
+  // assets served by the API (4002). Logos and other public binaries
+  // need to load from the partner-portal browser, so we explicitly
+  // tag the response with `cross-origin`. The other CSP / X-Frame /
+  // referrer policies set by helmet upstream still apply.
   app.use(
     '/static',
     express.static(STORAGE_ROOT_ABS, {
@@ -93,6 +100,9 @@ export function createApp(): Express {
       immutable: true,
       dotfiles: 'deny',
       fallthrough: false,
+      setHeaders(res) {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      },
     }),
   );
 
