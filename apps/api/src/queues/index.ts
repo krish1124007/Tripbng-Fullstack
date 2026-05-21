@@ -30,6 +30,7 @@ export const QUEUE_NAMES = {
   BUS_OPERATOR_CANCELLATION_POLLER: 'bus-operator-cancellation-poller',
   KAFILA_TICKET_POLL: 'kafila-ticket-poll',
   PAYMENT_RECON_SWEEPER: 'payment-recon-sweeper',
+  MANUAL_ISSUANCE_FOLLOWUP: 'manual-issuance-followup',
 } as const;
 
 let holdExpiryQueue: Queue | null = null;
@@ -52,6 +53,7 @@ let approvalExpirySweeperQueue: Queue | null = null;
 let busOperatorCancellationPollerQueue: Queue | null = null;
 let kafilaTicketPollQueue: Queue | null = null;
 let paymentReconSweeperQueue: Queue | null = null;
+let manualIssuanceFollowupQueue: Queue | null = null;
 
 const workers: Worker[] = [];
 
@@ -209,6 +211,16 @@ export function getPaymentReconSweeperQueue(): Queue {
   return paymentReconSweeperQueue;
 }
 
+export function getManualIssuanceFollowupQueue(): Queue {
+  if (!manualIssuanceFollowupQueue) {
+    manualIssuanceFollowupQueue = new Queue(
+      QUEUE_NAMES.MANUAL_ISSUANCE_FOLLOWUP,
+      sharedConnection(),
+    );
+  }
+  return manualIssuanceFollowupQueue;
+}
+
 /** Enqueue a Kafila ticket-poll job. Booking-service hook: call this
  *  after adapter.hold() if the returned booking's ticket numbers
  *  are empty / CurrentStatus === 'PENDING'. Worker handles the rest:
@@ -303,6 +315,9 @@ export async function startWorkers(): Promise<void> {
   const { kafilaTicketPollProcessor } = await import('./kafila-ticket-poll.worker.js');
   const { paymentReconSweeperProcessor, schedulePaymentReconSweeper } = await import(
     './payment-recon-sweeper.worker.js'
+  );
+  const { manualIssuanceFollowupProcessor, scheduleManualIssuanceFollowup } = await import(
+    './manual-issuance-followup.worker.js'
   );
 
   const opts: WorkerOptions = {
@@ -487,6 +502,15 @@ export async function startWorkers(): Promise<void> {
       { ...opts, concurrency: 1 },
     ),
   );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.MANUAL_ISSUANCE_FOLLOWUP,
+      manualIssuanceFollowupProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — single Mongo scan per 4h tick; serial keeps logs
+      // and dedupe-key SETNX behaviour clean.
+      { ...opts, concurrency: 1 },
+    ),
+  );
 
   for (const w of workers) {
     w.on('failed', (job, err) =>
@@ -535,6 +559,10 @@ export async function startWorkers(): Promise<void> {
   // polling the provider for any PT stuck in PENDING > 30 min.
   await schedulePaymentReconSweeper(getPaymentReconSweeperQueue());
 
+  // Manual-issuance follow-up — every 4 hours. Nags ops about bookings
+  // sitting in PENDING_MANUAL past tier thresholds (4h / 12h / 24h / 48h).
+  await scheduleManualIssuanceFollowup(getManualIssuanceFollowupQueue());
+
   logger.info({ workers: workers.length, isProd }, 'workers started');
 }
 
@@ -563,6 +591,7 @@ export async function stopWorkers(): Promise<void> {
       busOperatorCancellationPollerQueue,
       kafilaTicketPollQueue,
       paymentReconSweeperQueue,
+      manualIssuanceFollowupQueue,
     ]
       .filter((q): q is Queue => !!q)
       .map((q) => q.close()),
@@ -587,4 +616,5 @@ export async function stopWorkers(): Promise<void> {
   busOperatorCancellationPollerQueue = null;
   kafilaTicketPollQueue = null;
   paymentReconSweeperQueue = null;
+  manualIssuanceFollowupQueue = null;
 }

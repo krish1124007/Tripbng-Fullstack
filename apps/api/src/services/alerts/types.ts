@@ -43,6 +43,7 @@ export type AlertEvent =
   | 'HOTEL_BOOKING_CANCELLED'
   // Ops-only
   | 'CIRCUIT_BREAKER_TRIPPED'
+  | 'MANUAL_ISSUANCE_PENDING_REMINDER'
   // ── Agency-wallet additions (Phases 1-8 of AGENCY_WALLET_SYSTEM spec) ──
   // Credit-due reminder anchors (spec §8)
   | 'CREDIT_DUE_T_MINUS_3'
@@ -157,6 +158,38 @@ export interface BreakerVars {
   supplier: string;
   errorRate: number;
   windowSec: number;
+}
+
+// ── Ops vars ──
+
+/** Manual-issuance follow-up — fired by the cron worker when a booking has
+ *  been parked in PENDING_MANUAL longer than the tier threshold. Single
+ *  event, but `tier` lets the template ramp urgency (subject line + colour
+ *  + escalation copy) without proliferating events. */
+export interface ManualIssuancePendingVars {
+  bookingCode: string;
+  bookingId: string;
+  agencyName: string;
+  supplierCode: string;
+  sector: string;
+  /** ISO yyyy-mm-dd — travel date snapshot. */
+  travelDate: string;
+  paxCount: number;
+  /** Amount the agency was debited at confirm time, in paise. */
+  amountPaise: number;
+  /** ISO timestamp of when the booking entered PENDING_MANUAL. */
+  pendingSince: string;
+  /** Floored hours-since-pending — drives the subject + body urgency. */
+  pendingHours: number;
+  /** Escalation tier. Each is keyed to a min-hours threshold; once hit,
+   *  the booking fires once per tier (Redis dedupe), then escalates. */
+  tier: 'REMINDER' | 'ESCALATION' | 'CRITICAL' | 'CRITICAL_HIGH';
+  /** Snapshot of `booking.internalNotes` so ops sees the routing reason
+   *  (which Map Source matched, why the booking is here) in-line. */
+  internalNotes: string | null;
+  /** Deep-link to the admin booking-detail page so ops can issue the PNR
+   *  in one click. */
+  adminUrl: string;
 }
 
 // ── Agency-wallet vars ──
@@ -303,6 +336,7 @@ export type AlertPayload =
       };
     }
   | { event: 'CIRCUIT_BREAKER_TRIPPED'; vars: BreakerVars }
+  | { event: 'MANUAL_ISSUANCE_PENDING_REMINDER'; vars: ManualIssuancePendingVars }
   // Agency-wallet events
   | { event: 'CREDIT_DUE_T_MINUS_3'; vars: CreditDueVars }
   | { event: 'CREDIT_DUE_T_MINUS_1'; vars: CreditDueVars }

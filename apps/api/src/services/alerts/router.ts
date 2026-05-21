@@ -49,6 +49,7 @@ const DEFAULT_CHANNELS: Record<AlertEvent, AlertChannel[]> = {
 
   // Ops
   CIRCUIT_BREAKER_TRIPPED: ['email'], // ops inbox only
+  MANUAL_ISSUANCE_PENDING_REMINDER: ['email'], // ops inbox only
 
   // Agency-wallet
   // Credit-due reminders escalate by anchor: heads-up is in-app + email only;
@@ -116,5 +117,9 @@ export function applyRecipientPrefs(
 /** True when an event respects per-agency configuration. Hard-coded to
  *  exclude security-critical and ops-only events that must always fire. */
 export function isUserConfigurableEvent(event: AlertEvent): boolean {
-  return event !== 'PASSWORD_RESET_OTP' && event !== 'CIRCUIT_BREAKER_TRIPPED';
+  return (
+    event !== 'PASSWORD_RESET_OTP' &&
+    event !== 'CIRCUIT_BREAKER_TRIPPED' &&
+    event !== 'MANUAL_ISSUANCE_PENDING_REMINDER'
+  );
 }

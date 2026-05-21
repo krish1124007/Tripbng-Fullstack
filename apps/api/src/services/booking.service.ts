@@ -882,7 +882,29 @@ export async function cancelBooking(
   // if supplierCancellationRef is already set, skip — the cancel-poll
   // worker will handle reconciliation.
   if (booking.supplierBookingRef && !booking.supplierCancellationRef) {
-    try {
+    // TBO LCC pre-filter — refs prefixed with `LCC:<uuid>` are synthetic IDs
+    // the adapter mints at hold-time when the carrier is LCC and the supplier
+    // bookingId only materialises after `ticket()`. If the booking is being
+    // cancelled BEFORE ticketing completes (or after a ticket failure that
+    // left the synthetic ref in place), the cancel call would land at
+    // adapter.cancel() and throw BAD_REQUEST with a noisy FAILED log. Since
+    // an unsold LCC ref means there's nothing on the supplier side to
+    // cancel anyway, short-circuit to PROCESSED + an explanatory note. The
+    // local refund + ledger entries still run normally.
+    if (booking.supplierBookingRef.startsWith('LCC:')) {
+      booking.supplierCancellationStatus = 'PROCESSED';
+      booking.internalNotes = booking.internalNotes
+        ? `${booking.internalNotes}\nSupplier cancel skipped — LCC synthetic ref (no supplier booking to cancel).`
+        : 'Supplier cancel skipped — LCC synthetic ref (no supplier booking to cancel).';
+      logger.info(
+        {
+          bookingId: String(booking._id),
+          supplier: booking.supplierCode,
+          supplierBookingRef: booking.supplierBookingRef,
+        },
+        'supplier cancel skipped — LCC synthetic ref never promoted to bookingId',
+      );
+    } else try {
       const adapter = adapterForCode(booking.supplierCode, actor.tenantId);
       // SeriesAdapter has no supplier behind it — calling cancel() on it
       // returns an ok shape but contributes nothing. Skip cleanly.
