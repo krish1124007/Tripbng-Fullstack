@@ -32,12 +32,17 @@ import {
   type PublicSavedPassenger,
   type SavedPassengerListResponse,
 } from '@tripbng/shared';
+import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { SavedPassenger, type SavedPassengerDoc } from '../models/SavedPassenger.js';
 
 export const savedPassengerRouter: RouterT = Router();
+// Authenticated everywhere — every read/write needs a tenant + agency
+// context. Without this middleware `requirePermission` below would
+// throw TOKEN_INVALID because req.auth would never be populated.
+savedPassengerRouter.use(authenticate, requireAuth);
 
 // ────────── LIST + SEARCH ──────────
 //
