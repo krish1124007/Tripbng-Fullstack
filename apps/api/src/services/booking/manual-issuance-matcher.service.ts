@@ -41,6 +41,49 @@ import { SupplierSource, type SupplierSourceDoc } from '../../models/SupplierSou
 import type { BookingDoc } from '../../models/Booking.js';
 import { logger } from '../../config/logger.js';
 import { deriveTravelType } from '../../data/airports.js';
+import type {
+  ConditionFieldSchema,
+  ConditionNode,
+} from '@tripbng/shared';
+import {
+  ConditionTreeError,
+  evaluateConditionTree,
+  type ContextValue,
+} from '../../utils/condition-tree.js';
+
+/**
+ * Field schema for the manual-issuance condition tree. Drives the admin
+ * UI's field picker AND the runtime evaluator's type coercion. Keys are
+ * snake_case so they survive a JSON round trip cleanly + grep-search.
+ */
+export const MANUAL_ISSUANCE_FIELDS: ConditionFieldSchema[] = [
+  { key: 'pax_count', label: 'Passenger count', type: 'NUMBER' },
+  {
+    key: 'per_pax_paise',
+    label: 'Per-passenger amount (paise)',
+    type: 'NUMBER',
+    description: 'Total agency-payable amount ÷ pax count.',
+  },
+  {
+    key: 'total_paise',
+    label: 'Total amount (paise)',
+    type: 'NUMBER',
+  },
+  {
+    key: 'trip_type',
+    label: 'Trip type',
+    type: 'ENUM',
+    options: [
+      { value: 'ONEWAY', label: 'One way' },
+      { value: 'ROUNDTRIP', label: 'Round trip' },
+      { value: 'MULTICITY', label: 'Multi-city' },
+    ],
+  },
+  { key: 'sector', label: 'Sector', type: 'STRING' },
+  { key: 'travel_date', label: 'Travel date', type: 'DATE' },
+  { key: 'booking_date', label: 'Booking date', type: 'DATE' },
+  { key: 'is_nonstop', label: 'Non-stop flight', type: 'BOOLEAN' },
+];
 
 export interface MatchContext {
   tenantId: string;
@@ -219,7 +262,18 @@ export async function matchManualIssuance(
     const mi = src.manualIssuance;
     if (!mi || !mi.pendingBooking) continue;
     const skipped: string[] = [];
-    if (criteriaMatch(mi, digest, skipped)) {
+
+    // Phase-G: prefer the new condition tree when it's authored. A
+    // malformed tree falls back to the legacy criteria with a loud log
+    // — the alternative (refusing to match) would silently regress on
+    // a config bug.
+    const tree = (mi as unknown as { conditionTree?: ConditionNode | null }).conditionTree;
+    const srcId = String((src as unknown as { _id: Types.ObjectId })._id);
+    const matched = tree
+      ? evaluateTreeOrFallback(tree, mi, digest, skipped, srcId)
+      : criteriaMatch(mi, digest, skipped);
+
+    if (matched) {
       const mapSourceId = String(
         (src as unknown as { _id: Types.ObjectId })._id,
       );
@@ -231,6 +285,7 @@ export async function matchManualIssuance(
           supplierCode: booking.supplierCode,
           reason,
           skippedFields: skipped,
+          matchedVia: tree ? 'CONDITION_TREE' : 'LEGACY_CRITERIA',
         },
         'manual-issuance match — booking will land in PENDING_MANUAL',
       );
@@ -239,6 +294,63 @@ export async function matchManualIssuance(
   }
 
   return { matched: false, mapSourceId: null, reason: null, skippedFields: [] };
+}
+
+/**
+ * Evaluate the condition tree; on a structural error fall back to the
+ * legacy criteria block. The fallback path makes the rollout safe: a
+ * tree authored against an older field schema (e.g. after a schema
+ * field rename) can't break a previously-working booking flow.
+ */
+function evaluateTreeOrFallback(
+  tree: ConditionNode,
+  mi: NonNullable<SupplierSourceDoc['manualIssuance']>,
+  digest: BookingDigest,
+  skipped: string[],
+  mapSourceId: string,
+): boolean {
+  try {
+    const result = evaluateConditionTree(tree, digest, {
+      schema: MANUAL_ISSUANCE_FIELDS,
+      extract: (field, ctx) => digestFieldExtractor(field, ctx) as ContextValue,
+    });
+    return result.matched;
+  } catch (err) {
+    if (err instanceof ConditionTreeError) {
+      logger.warn(
+        { err, mapSourceId, code: err.code, path: err.path },
+        'manual-issuance: conditionTree threw — falling back to legacy criteria',
+      );
+      return criteriaMatch(mi, digest, skipped);
+    }
+    throw err;
+  }
+}
+
+/** Map ConditionFieldSchema.key → BookingDigest field. The cast at the
+ *  evaluator boundary above keeps this function readable + free of
+ *  per-case TS narrowing noise. */
+function digestFieldExtractor(field: ConditionFieldSchema, digest: BookingDigest): unknown {
+  switch (field.key) {
+    case 'pax_count':
+      return digest.passengerCount;
+    case 'per_pax_paise':
+      return digest.perPaxAmountPaise;
+    case 'total_paise':
+      return digest.totalAmountPaise;
+    case 'trip_type':
+      return digest.tripType;
+    case 'sector':
+      return digest.sector;
+    case 'travel_date':
+      return digest.travelDate;
+    case 'booking_date':
+      return digest.bookingDate;
+    case 'is_nonstop':
+      return digest.hasNonStop;
+    default:
+      return undefined;
+  }
 }
 
 function buildReason(src: SupplierSourceDoc, d: BookingDigest): string {

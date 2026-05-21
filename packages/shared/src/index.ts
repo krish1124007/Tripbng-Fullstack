@@ -2,6 +2,7 @@ export * from './enums.js';
 export * from './permissions.js';
 export * from './errorCodes.js';
 export * from './codes.js';
+export * from './condition-tree.js';
 export * from './schemas/index.js';
 // Money utility — exposed as a namespace so callers can write
 // `Money.add(...)`, `Money.formatINR(...)` without name collisions with

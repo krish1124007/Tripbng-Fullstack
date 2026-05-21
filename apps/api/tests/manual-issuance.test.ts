@@ -452,6 +452,130 @@ describe('matchManualIssuance — agency-group scoping', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phase-G — condition-tree path on SupplierSource.manualIssuance
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('matchManualIssuance — conditionTree (Phase G)', () => {
+  it('routes via the tree when authored — AND of (pax >= 3) and (sector = BOM-DEL)', async () => {
+    // Mixed-type subdoc: Mongoose ignores type-checking inside; the
+    // matcher pulls the tree at runtime + hands it to the evaluator.
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      status: 'ACTIVE',
+      manualIssuance: {
+        pendingBooking: true,
+        conditionTree: {
+          type: 'AND',
+          children: [
+            { type: 'LEAF', field: 'pax_count', op: 'GTE', value: 3 },
+            { type: 'LEAF', field: 'sector', op: 'EQ', value: 'BOM-DEL' },
+          ],
+        },
+      },
+    });
+    const booking = await makeBooking({ pax: 3, sector: 'BOM-DEL' });
+    const result = await matchManualIssuance(booking, {
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      agencyGroupIds: [],
+    });
+    expect(result.matched).toBe(true);
+  });
+
+  it('rejects via the tree — OR of two sectors, none match', async () => {
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      status: 'ACTIVE',
+      manualIssuance: {
+        pendingBooking: true,
+        conditionTree: {
+          type: 'OR',
+          children: [
+            { type: 'LEAF', field: 'sector', op: 'EQ', value: 'DEL-BLR' },
+            { type: 'LEAF', field: 'sector', op: 'EQ', value: 'BLR-CCU' },
+          ],
+        },
+      },
+    });
+    const booking = await makeBooking({ sector: 'BOM-DEL' });
+    const result = await matchManualIssuance(booking, {
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      agencyGroupIds: [],
+    });
+    expect(result.matched).toBe(false);
+  });
+
+  it('malformed tree falls back to legacy criteria (BAD_VALUE on BETWEEN)', async () => {
+    // BETWEEN with a non-tuple throws BAD_VALUE — matcher must catch it
+    // and route through `criteriaMatch` instead of crashing the booking.
+    // We pair it with a legacy maximumPax=10 that matches the booking, so
+    // the fallback path produces a match.
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      status: 'ACTIVE',
+      manualIssuance: {
+        pendingBooking: true,
+        maximumPax: 10, // legacy gate — matches the 3-pax fixture
+        conditionTree: {
+          type: 'AND',
+          children: [
+            // Malformed — BETWEEN expects [lo, hi].
+            { type: 'LEAF', field: 'per_pax_paise', op: 'BETWEEN', value: 5 },
+          ],
+        },
+      },
+    });
+    const booking = await makeBooking({ pax: 3 });
+    const result = await matchManualIssuance(booking, {
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      agencyGroupIds: [],
+    });
+    // Fallback to legacy → maximumPax=10 covers the 3-pax booking → matched.
+    expect(result.matched).toBe(true);
+  });
+
+  it('tree takes precedence over legacy criteria when both are set', async () => {
+    // Tree says "reject"; legacy maximumPax=10 would say "accept". The
+    // matcher MUST honour the tree.
+    await SupplierSource.create({
+      tenantId,
+      supplierId,
+      productType: 'FLIGHT',
+      travelType: 'DOMESTIC',
+      status: 'ACTIVE',
+      manualIssuance: {
+        pendingBooking: true,
+        maximumPax: 10,
+        conditionTree: {
+          type: 'LEAF',
+          field: 'pax_count',
+          op: 'GTE',
+          value: 100, // pax=3 won't match
+        },
+      },
+    });
+    const booking = await makeBooking({ pax: 3 });
+    const result = await matchManualIssuance(booking, {
+      tenantId: String(tenantId),
+      agencyId: String(agencyId),
+      agencyGroupIds: [],
+    });
+    expect(result.matched).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // issueManually — admin transition PENDING_MANUAL → TICKETED
 // ─────────────────────────────────────────────────────────────────────────────
 

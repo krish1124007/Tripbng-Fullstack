@@ -34,6 +34,7 @@ import {
   StatusBadge,
 } from '@/components/ui';
 import { AirlineLogo } from '@/components/airline-logo';
+import { WebCheckInButton } from '@/components/web-check-in-button';
 import { useApiMutation, useApiQuery, useInvalidateOnSuccess } from '@/lib/api-client';
 import { useAuthStore } from '@/lib/auth-store';
 import { downloadAuthenticatedFile } from '@/lib/download';
@@ -171,9 +172,20 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
             !isVisa &&
             !isBus &&
             !isInsurance ? (
-              <Button variant="secondary" onClick={() => downloadPdf('ticket')}>
-                <Plane className="h-4 w-4" /> e-Ticket
-              </Button>
+              <>
+                <Button variant="secondary" onClick={() => downloadPdf('ticket')}>
+                  <Plane className="h-4 w-4" /> e-Ticket
+                </Button>
+                <WebCheckInButton
+                  booking={{
+                    status: b.status,
+                    airlinePnr: b.airlinePnr,
+                    pnr: b.pnr,
+                    segments: b.segments,
+                    passengers: b.passengers,
+                  }}
+                />
+              </>
             ) : null}
             <Button variant="secondary" onClick={() => downloadPdf('invoice')}>
               <Receipt className="h-4 w-4" /> Invoice

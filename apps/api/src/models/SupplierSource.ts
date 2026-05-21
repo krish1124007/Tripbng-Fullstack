@@ -80,6 +80,17 @@ const ManualIssuanceSubSchema = new Schema(
     applyForStopFlight: { type: Boolean, default: false },
     /** Comma-separated sectors (e.g. "DEL-BOM,DEL-DXB"). */
     sector: { type: String, default: null },
+    /** Optional condition tree — Phase G. Additive next to the legacy
+     *  flat-AND criteria above. When present, the manual-issuance matcher
+     *  evaluates the tree INSTEAD of the legacy fields. When absent,
+     *  legacy behaviour is unchanged. Both encodings can coexist on the
+     *  same row during a migration (admin form lets you author either).
+     *
+     *  Stored as Mixed so the tree shape isn't constrained by a Mongoose
+     *  schema — the runtime evaluator validates structure and throws a
+     *  ConditionTreeError on malformed trees (caught + logged + falls
+     *  back to legacy criteria). */
+    conditionTree: { type: Schema.Types.Mixed, default: null },
   },
   { _id: false },
 );
