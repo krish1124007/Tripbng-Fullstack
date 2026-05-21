@@ -121,4 +121,4 @@ export function BrandingThemeProvider({ initial, children }: ProviderProps) {
 // function"). The helper now lives in `./branding-style-tag.ts` (no
 // 'use client'), and we re-export it so existing client-side import
 // sites that grabbed it from this file keep working.
-export { brandingStyleTag } from './branding-style-tag.js';
+export { brandingStyleTag } from './branding-style-tag';
