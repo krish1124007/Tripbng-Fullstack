@@ -1,16 +1,20 @@
-// Sentry instrumentation — guarded by env. When SENTRY_DSN isn't set, every
-// helper is a no-op so dev environments don't push events to a shared project.
+// Sentry instrumentation — backend error tracking.
 //
-// We deliberately don't take a runtime dependency on `@sentry/node` (so the
-// monorepo install stays slim until Sentry is provisioned). Once provisioned:
-//   1. Add `@sentry/node` as a dependency.
-//   2. Replace the no-op `captureException` body with `Sentry.captureException(...)`.
-//   3. Set SENTRY_DSN in the production secret manager.
+// Activation:
+//   • `SENTRY_DSN=https://…` in env enables real upload.
+//   • Empty DSN routes every helper to pino at error level — same call
+//     sites stay valid, no infrastructure dependency, dev/test runs never
+//     leak events to a shared project.
 //
-// Until then the helpers route to pino at error level — same call sites,
-// equivalent visibility, no infrastructure dependency.
+// Why we don't init at module-load time:
+//   `initSentry()` is called explicitly from src/index.ts AFTER env has
+//   been validated + logger has been initialised, so failures during
+//   start-up still surface clearly. (Mongoose connect / Redis connect
+//   happen later in the same boot path; tagging them with sentry adds
+//   real value.)
 
 import { logger } from './logger.js';
+import { env } from './env.js';
 
 interface SentryOptions {
   tags?: Record<string, string>;
@@ -18,23 +22,67 @@ interface SentryOptions {
   user?: { id?: string; tenantId?: string };
 }
 
-const DSN = process.env.SENTRY_DSN;
-const ENABLED = !!DSN && DSN.startsWith('https://');
+const ENABLED = !!env.SENTRY_DSN && env.SENTRY_DSN.startsWith('https://');
 
-export function initSentry(): void {
+// Lazy import — the @sentry/node SDK pulls in OpenTelemetry which is
+// chunky. We only load it when Sentry is actually enabled so dev startup
+// stays snappy and the test suite doesn't pay the import cost.
+type SentryNode = typeof import('@sentry/node');
+let sentryModule: SentryNode | null = null;
+
+async function getSentry(): Promise<SentryNode | null> {
+  if (!ENABLED) return null;
+  if (sentryModule) return sentryModule;
+  try {
+    sentryModule = await import('@sentry/node');
+    return sentryModule;
+  } catch (err) {
+    // The SDK might be missing in a stripped container. Fall back to
+    // pino without crashing the process.
+    logger.warn({ err }, 'sentry: @sentry/node not installed, falling back to pino');
+    return null;
+  }
+}
+
+export async function initSentry(): Promise<void> {
   if (!ENABLED) {
     logger.info('sentry: SENTRY_DSN not set, error tracking falls back to pino');
     return;
   }
-  // When @sentry/node is added:
-  //   import * as Sentry from '@sentry/node';
-  //   Sentry.init({ dsn: DSN, environment: process.env.NODE_ENV, tracesSampleRate: 0.1 });
-  logger.info('sentry: instrumented (placeholder — add @sentry/node to enable real upload)');
+  const Sentry = await getSentry();
+  if (!Sentry) return;
+
+  Sentry.init({
+    dsn: env.SENTRY_DSN,
+    environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV,
+    ...(env.SENTRY_RELEASE ? { release: env.SENTRY_RELEASE } : {}),
+    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE,
+    // Drop transactions that traversed health checks — they're high
+    // volume + low signal, and the Sentry quota matters in production.
+    tracesSampler: (samplingContext) => {
+      const name = samplingContext.transactionContext?.name ?? '';
+      if (name.includes('/health') || name.includes('/metrics')) return 0;
+      return env.SENTRY_TRACES_SAMPLE_RATE;
+    },
+    // Don't ship payloads of inbound requests by default — most carry
+    // PII (passport numbers, email addresses, tokens). Each capture
+    // call attaches the fields we WANT visible via the `extra` option.
+    sendDefaultPii: false,
+  });
+  logger.info(
+    {
+      env: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV,
+      tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE,
+      release: env.SENTRY_RELEASE ?? '(unset)',
+    },
+    'sentry: instrumented',
+  );
 }
 
 export function captureException(err: unknown, opts: SentryOptions = {}): void {
-  // Real implementation:
-  //   if (ENABLED) Sentry.withScope((scope) => { scope.setTags(opts.tags); ...; Sentry.captureException(err); });
+  // Mirror to pino regardless of whether Sentry is enabled — local logs
+  // stay the canonical record. Sentry is an additional shipper, not a
+  // replacement.
   logger.error(
     {
       err,
@@ -44,28 +92,87 @@ export function captureException(err: unknown, opts: SentryOptions = {}): void {
     },
     'captured-exception',
   );
+  if (!ENABLED) return;
+  void getSentry().then((Sentry) => {
+    if (!Sentry) return;
+    Sentry.withScope((scope) => {
+      if (opts.tags) scope.setTags(opts.tags);
+      if (opts.extra) scope.setExtras(opts.extra);
+      if (opts.user) scope.setUser(opts.user);
+      Sentry.captureException(err);
+    });
+  });
 }
 
-export function captureMessage(message: string, level: 'info' | 'warn' | 'error' = 'info', opts: SentryOptions = {}): void {
+export function captureMessage(
+  message: string,
+  level: 'info' | 'warn' | 'error' = 'info',
+  opts: SentryOptions = {},
+): void {
   const fn = level === 'error' ? logger.error : level === 'warn' ? logger.warn : logger.info;
   fn.call(
     logger,
     { sentryTags: opts.tags, sentryExtra: opts.extra, sentryUser: opts.user },
     message,
   );
+  if (!ENABLED) return;
+  // Sentry's SeverityLevel uses "warning" instead of "warn" — map at the
+  // boundary so callers keep the shorter pino-style label.
+  const sentryLevel: 'info' | 'warning' | 'error' =
+    level === 'warn' ? 'warning' : level;
+  void getSentry().then((Sentry) => {
+    if (!Sentry) return;
+    Sentry.withScope((scope) => {
+      if (opts.tags) scope.setTags(opts.tags);
+      if (opts.extra) scope.setExtras(opts.extra);
+      if (opts.user) scope.setUser(opts.user);
+      Sentry.captureMessage(message, sentryLevel);
+    });
+  });
 }
 
-/** Express error-middleware adapter — drop into the chain just before `errorHandler`. */
-export function sentryRequestHandler() {
-  return (_req: unknown, _res: unknown, next: () => void) => next();
+/** Express request-handler — placed at the top of the middleware chain
+ *  so every subsequent error in the request lifecycle is scoped to a
+ *  Sentry transaction. */
+export function sentryRequestHandler(): (
+  req: unknown,
+  res: unknown,
+  next: () => void,
+) => void {
+  // When @sentry/node is enabled we install its Express integration via
+  // Sentry.setupExpressErrorHandler later. The request handler itself
+  // doesn't need explicit scoping in v10 — the SDK's autoinstrumentation
+  // wraps requests automatically.
+  return (_req, _res, next) => next();
 }
 
-export function sentryErrorHandler() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (err: any, req: any, _res: any, next: any) => {
+/** Express error-handler — drop into the chain just before the
+ *  application's central errorHandler. Captures unhandled errors with
+ *  the route + auth context attached. */
+export function sentryErrorHandler(): (
+  err: unknown,
+  req: unknown,
+  res: unknown,
+  next: (err: unknown) => void,
+) => void {
+  return (err, req, _res, next) => {
+    const r = req as {
+      method?: string;
+      baseUrl?: string;
+      path?: string;
+      auth?: { userId?: string; tenantId?: string };
+    };
+    const status = (err as { http?: number })?.http ?? 500;
     captureException(err, {
-      tags: { route: `${req.method} ${req.baseUrl}${req.path}`, status: String(err?.http ?? 500) },
-      user: { id: req.auth?.userId, tenantId: req.auth?.tenantId },
+      tags: { route: `${r.method ?? '?'} ${r.baseUrl ?? ''}${r.path ?? ''}`, status: String(status) },
+      ...(r.auth?.userId || r.auth?.tenantId
+        ? {
+            user: {
+              ...(r.auth.userId ? { id: r.auth.userId } : {}),
+              ...(r.auth.tenantId ? { tenantId: r.auth.tenantId } : {}),
+            },
+          }
+        : {}),
     });
     next(err);
   };

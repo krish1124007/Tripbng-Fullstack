@@ -23,6 +23,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@sentry/node": "^10.53.1",
     "@tripbng/shared": "workspace:*",
     "argon2": "^0.41.1",
     "bcryptjs": "^2.4.3",

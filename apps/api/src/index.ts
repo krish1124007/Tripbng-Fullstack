@@ -3,6 +3,7 @@ import { connectMongo, disconnectMongo } from './config/db.js';
 import { connectRedis, disconnectRedis } from './config/redis.js';
 import { env, isTest } from './config/env.js';
 import { logger } from './config/logger.js';
+import { initSentry } from './config/sentry.js';
 import { startWorkers, stopWorkers } from './queues/index.js';
 import { setReady } from './middleware/health.js';
 import {
@@ -12,6 +13,10 @@ import {
 import { primeIntegrationHealthCache } from './services/integration-status.service.js';
 
 async function main() {
+  // Initialise Sentry FIRST so any error from the DB / Redis connect
+  // is captured. No-op when SENTRY_DSN is unset.
+  await initSentry();
+
   await connectMongo();
   await connectRedis();
 

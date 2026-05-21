@@ -1,0 +1,111 @@
+# CI pipeline — runs on every PR + every push to main.
+#
+# Phase-E baseline: typecheck + lint + frontend tests + API tests against
+# real Mongo/Redis service containers. The API test suite is integration-
+# heavy (touches Mongo through Mongoose for every booking/payment fixture);
+# Vitest already serialises file execution via singleFork, so a single
+# pair of service containers is enough.
+#
+# Caching strategy:
+#   - pnpm store cached by lockfile hash → cold install ~25-40s, warm ~3s
+#   - turbo remote cache disabled here (set TURBO_TOKEN later if we add it)
+#
+# Why not split jobs? Build → typecheck → test could parallelise, but the
+# total wall clock today is ~3 min and the visibility cost of one job
+# is noticeable. Revisit when the suite breaches 8-10 min.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: typecheck + lint + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Mongo replica set is needed by booking tests (they use sessions for
+    # ledger writes). The bitnami image bootstraps a 1-node RS by default
+    # which is enough — the API connects to `localhost:27017` either way.
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        # Mongo's healthcheck via `mongosh ping` ensures we don't start
+        # the test job before the daemon accepts connections.
+        options: >-
+          --health-cmd "echo 'db.runCommand({ping:1})' | mongosh --quiet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Initialise Mongo replica set
+        # Booking tests need transactions which require a replica set.
+        # The bitnami image runs as `--replSet`-less by default; we bring
+        # up a 1-node RS so Mongoose's transactions API doesn't throw.
+        run: |
+          docker exec ${{ job.services.mongodb.id }} mongosh --quiet --eval '
+            try {
+              rs.status();
+            } catch (e) {
+              rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] });
+            }
+          ' || true
+
+      - name: Typecheck (api + web + shared)
+        # Filtered to the user-facing workspaces — packages/config is a
+        # types-only export that lacks a buildable `src/`.
+        run: |
+          pnpm -r --filter @tripbng/api \
+                  --filter @tripbng/web \
+                  --filter @tripbng/shared \
+                  exec tsc --noEmit
+
+      - name: Lint
+        run: pnpm lint
+        # Lint failures fail the build — set `continue-on-error: true`
+        # temporarily if a lint sweep is mid-flight on a long-lived branch.
+
+      - name: Run tests
+        run: pnpm test
+        env:
+          NODE_ENV: test
+          # API package's vitest.config.ts also sets these — duplicated
+          # here so an env-only run (e.g. `vitest run` from the API dir)
+          # works in CI without re-reading the config.
+          MONGO_URI: mongodb://localhost:27017/tripbng_test?replicaSet=rs0
+          REDIS_URL: redis://localhost:6379
+          JWT_ACCESS_SECRET: test-test-test-test-test-test-test-test-test-test
+          JWT_REFRESH_SECRET: test-refresh-test-refresh-test-refresh-test-refresh
+          INTERNAL_API_KEY: test-internal-key-min-32-chars-xxxxx
