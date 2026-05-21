@@ -40,6 +40,7 @@ import {
   Card,
   CardContent,
   DataTable,
+  EmptyState,
   Input,
   PageHeader,
   Pagination,
@@ -51,6 +52,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Skeleton,
 } from '@/components/ui';
 import { CategoryDonut, EarningsTrendChart, type DonutSlice } from '@/components/charts';
 import { useApiPaginatedQuery, useApiQuery } from '@/lib/api-client';
@@ -449,6 +451,7 @@ export default function WalletPage() {
           value={formatPaiseAsINR(balancePaise)}
           hint={sum ? `${sum.ownerCode} · ${sum.ownerName}` : '—'}
           large
+          loading={summary.isLoading}
         />
         <BalanceCard
           tone="success"
@@ -462,6 +465,7 @@ export default function WalletPage() {
           }
           progress={limitPaise > 0 ? utilisation : null}
           progressTone={utilisationTone}
+          loading={summary.isLoading}
         />
         <BalanceCard
           tone="neutral"
@@ -469,6 +473,7 @@ export default function WalletPage() {
           eyebrow="Credit Limit"
           value={formatPaiseAsINR(limitPaise)}
           hint="Approved by accounts"
+          loading={summary.isLoading}
         />
         <BalanceCard
           tone={outstandingPaise > 0 ? 'danger' : 'neutral'}
@@ -483,6 +488,7 @@ export default function WalletPage() {
             outstandingPaise > 0 ? 'Current invoice exposure' : 'No dues — fully settled'
           }
           valueDanger={outstandingPaise > 0}
+          loading={summary.isLoading}
         />
       </section>
 
@@ -684,8 +690,16 @@ export default function WalletPage() {
         </Card>
       ) : grouped.length === 0 ? (
         <Card>
-          <CardContent className="grid place-items-center py-12 text-sm text-ink-3">
-            {search ? `No transactions match "${search}".` : 'No transactions yet.'}
+          <CardContent>
+            <EmptyState
+              icon={WalletIcon}
+              title={search ? 'No matching transactions' : 'No transactions yet'}
+              description={
+                search
+                  ? `No ledger entries match "${search}". Try clearing the filter or widening the date range.`
+                  : 'Top-ups, bookings, and refunds will appear here as the wallet sees activity.'
+              }
+            />
           </CardContent>
         </Card>
       ) : (
@@ -739,6 +753,7 @@ function BalanceCard({
   progressTone,
   large,
   valueDanger,
+  loading,
 }: {
   tone: 'brand' | 'success' | 'neutral' | 'danger';
   icon: React.ReactNode;
@@ -749,6 +764,11 @@ function BalanceCard({
   progressTone?: 'success' | 'warning' | 'danger';
   large?: boolean;
   valueDanger?: boolean;
+  /** Render skeletons in place of the value + hint while data loads.
+   *  Without this the cards momentarily flash with ₹0 / "—" values when
+   *  the wallet page first mounts, which reads like a real zero-balance
+   *  state. */
+  loading?: boolean;
 }) {
   return (
     <Card
@@ -786,16 +806,29 @@ function BalanceCard({
             {eyebrow}
           </p>
         </div>
-        <p
-          className={cn(
-            'mt-3 font-mono font-bold tabular-nums leading-none tracking-tight',
-            large ? 'text-3xl' : 'text-2xl',
-            valueDanger ? 'text-danger' : 'text-ink-1',
-          )}
-        >
-          {value}
-        </p>
-        <p className="mt-1.5 text-[11px] text-ink-3">{hint}</p>
+        {loading ? (
+          <div
+            role="status"
+            aria-label={`Loading ${eyebrow.toLowerCase()}`}
+            aria-busy="true"
+          >
+            <Skeleton className={cn('mt-3', large ? 'h-9 w-32' : 'h-8 w-28')} />
+            <Skeleton className="mt-2 h-3 w-24" />
+          </div>
+        ) : (
+          <>
+            <p
+              className={cn(
+                'mt-3 font-mono font-bold tabular-nums leading-none tracking-tight',
+                large ? 'text-3xl' : 'text-2xl',
+                valueDanger ? 'text-danger' : 'text-ink-1',
+              )}
+            >
+              {value}
+            </p>
+            <p className="mt-1.5 text-[11px] text-ink-3">{hint}</p>
+          </>
+        )}
         {progress != null ? (
           <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
             <div

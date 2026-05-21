@@ -541,7 +541,7 @@ function SeatMap({ rows, picks, activeSegmentId, onSelect }: SeatMapProps) {
   }, [picks, activeSegmentId]);
 
   return (
-    <div className="mx-auto max-w-[400px] rounded-[40%_40%_18px_18px] border border-stroke-2 bg-surface-1 px-4 py-6 shadow-inner">
+    <div className="mx-auto w-full max-w-[min(400px,95vw)] rounded-[40%_40%_18px_18px] border border-stroke-2 bg-surface-1 px-4 py-6 shadow-inner">
       {/* Cockpit silhouette */}
       <div className="mb-4 h-12 rounded-b-[40%_60%] border-b border-stroke-2 bg-gradient-to-b from-surface-2 to-surface-1" />
 
