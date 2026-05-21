@@ -367,7 +367,7 @@ function PromoBanner() {
                 Starting from
               </p>
               <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums leading-none text-white">
-                USD 305
+                ₹24,999
                 <span className="ml-1 text-[10px] font-normal text-white/70">/pax</span>
               </p>
             </div>
