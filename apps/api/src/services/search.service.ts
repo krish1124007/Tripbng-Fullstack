@@ -102,6 +102,12 @@ async function priceOption(
   const segment = option.segments[0];
   if (!segment) throw new AppError('VALIDATION_ERROR', { reason: 'option missing segments' });
   const airline = segment.airline.code;
+  // Derive travelType once per option from the route's IATA codes. Earlier
+  // code hardcoded 'DOMESTIC' regardless of the request — international
+  // fares were priced through the domestic GST/markup rails by accident.
+  // `deriveTravelType` falls back to DOMESTIC when an airport isn't in our
+  // OpenFlights file (same fail-safe Phase 4 search filter uses).
+  const optionTravelType = deriveTravelType(segment.origin.code, segment.destination.code);
 
   const priceFor = (
     paxType: 'ADULT' | 'CHILD' | 'INFANT',
@@ -112,7 +118,7 @@ async function priceOption(
       baseFarePaise: perPaxBase,
       taxesPaise: perPaxTax,
       paxType,
-      travelType: request.tripType === 'ROUNDTRIP' ? 'DOMESTIC' : 'DOMESTIC',
+      travelType: optionTravelType,
       travelClass: request.travelClass,
       airline,
       origin: segment.origin.code,
@@ -377,9 +383,33 @@ function buildCacheKey(ctx: SearchContext, request: SearchRequest): string {
   const seg = request.segments
     .map((s) => `${s.origin}-${s.destination}-${new Date(s.date).toISOString().slice(0, 10)}`)
     .join('|');
+  // Key must vary on every input that can change which fares an agent sees:
+  //   - tenantId (already in the namespace prefix below)
+  //   - distributorId — pricing context loads distributor-scoped MarkupRules,
+  //                     so two agencies in different distributors with the
+  //                     same agency-side rules would otherwise share a key
+  //                     and one would see the other's prices
+  //   - agencyId — agency-scoped MarkupRules + Policy refs
+  //   - tripType — round-trip pairing changes the result set shape
+  //   - segments + class + pax + travelType
+  //
+  // Note `travelType` here is the request-side hint, not the per-option
+  // value derived from IATA — `priceOption` derives DOMESTIC vs INTERNATIONAL
+  // per option from the airport country codes. The request hint is included
+  // for completeness so a future "international-only" filter never collides
+  // with a domestic cached result.
   const hash = crypto
     .createHash('sha1')
-    .update(`${ctx.agencyId}|${seg}|${request.travelClass}|${JSON.stringify(request.pax)}`)
+    .update(
+      [
+        ctx.distributorId ?? 'no-dist',
+        ctx.agencyId ?? 'no-agency',
+        seg,
+        request.tripType,
+        request.travelClass,
+        JSON.stringify(request.pax),
+      ].join('|'),
+    )
     .digest('hex')
     .slice(0, 16);
   return `search:req:${ctx.tenantId}:${hash}`;

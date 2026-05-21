@@ -398,15 +398,43 @@ export async function confirmBooking(
   actor: BookingActor,
   input: ConfirmBookingRequest,
 ): Promise<BookingDoc> {
-  const booking = await Booking.findOne({
-    _id: input.bookingId,
-    tenantId: actor.tenantId,
-    agencyId: actor.agencyId,
-  });
-  if (!booking) throw new AppError('NOT_FOUND');
-  if (booking.status !== 'HOLD') {
-    throw new AppError('VALIDATION_ERROR', { reason: `booking is ${booking.status}, not HOLD` });
+  // Atomic HOLD → TICKETING_IN_PROGRESS claim. The previous flow read the
+  // booking, checked status, then saved — two concurrent /confirm calls
+  // could both pass the `status === 'HOLD'` check before either save
+  // committed, causing a double wallet debit + double supplier ticket call.
+  // `findOneAndUpdate` with the status in the filter makes the transition
+  // atomic at the Mongo layer: only one caller flips HOLD→TICKETING_IN_PROGRESS;
+  // the loser sees `null` and we surface the same error a status-mismatch
+  // read would have produced.
+  const claimed = await Booking.findOneAndUpdate(
+    {
+      _id: input.bookingId,
+      tenantId: actor.tenantId,
+      agencyId: actor.agencyId,
+      status: 'HOLD',
+    },
+    { $set: { status: 'TICKETING_IN_PROGRESS' } },
+    { new: true },
+  );
+
+  if (!claimed) {
+    // Distinguish "not ours / not found" from "already in flight" so the
+    // client sees the right message. One extra lookup; only on the loser
+    // path, so the happy path stays one round-trip.
+    const existing = await Booking.findOne({
+      _id: input.bookingId,
+      tenantId: actor.tenantId,
+      agencyId: actor.agencyId,
+    })
+      .select({ status: 1, expiresAt: 1 })
+      .lean();
+    if (!existing) throw new AppError('NOT_FOUND');
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `booking is ${existing.status}, not HOLD`,
+    });
   }
+  const booking = claimed;
+
   if (booking.expiresAt && booking.expiresAt < new Date()) {
     booking.status = 'EXPIRED';
     await booking.save();
@@ -419,10 +447,6 @@ export async function confirmBooking(
     }
     throw new AppError('HOLD_EXPIRED');
   }
-
-  // Wallet debit — atomic against the agency's balance. Throws INSUFFICIENT_WALLET on miss.
-  booking.status = 'TICKETING_IN_PROGRESS';
-  await booking.save();
 
   let walletTxnId;
   try {

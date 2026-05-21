@@ -507,6 +507,55 @@ describe('booking flow', () => {
     expect(inv?.seatsRemaining).toBe(100); // recovered
   });
 
+  it('concurrent /confirm calls only debit the wallet once', async () => {
+    // Regression for the Phase-A optimistic-locking fix. Earlier confirmBooking
+    // read → status-check → save without a Mongo-level guard; two simultaneous
+    // POST /confirm calls could both pass the `status === HOLD` check before
+    // either save committed, causing a double wallet debit + double supplier
+    // ticket call. We now `findOneAndUpdate({status:'HOLD'},...)` atomically.
+    await postCredit({
+      tenantId,
+      walletKind: 'AGENCY',
+      walletOwnerId: agencyId,
+      type: 'TOPUP',
+      amountPaise: 5_000_000,
+      performedBy: userId,
+    });
+    const searchId = 'sX-race';
+    const fareToken = buildFareToken();
+    await seedSearchCache(searchId, fareToken, 600_000);
+    const b = await holdBooking(actor(), {
+      searchId,
+      fareToken,
+      passengers: [
+        { type: 'ADULT', title: 'MR', firstName: 'A', lastName: 'B', fareCategory: 'REGULAR' },
+      ],
+      contact: { email: 'a@b.com', mobile: '+910000000000', countryCode: '+91' },
+    });
+
+    // Fire two confirms in parallel. Exactly one must win.
+    const results = await Promise.allSettled([
+      confirmBooking(actor(), {
+        bookingId: String(b._id),
+        paymentMode: 'WALLET',
+        acceptTerms: true,
+      }),
+      confirmBooking(actor(), {
+        bookingId: String(b._id),
+        paymentMode: 'WALLET',
+        acceptTerms: true,
+      }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // Wallet was debited once for the booking total — not twice.
+    const agency = await Agency.findById(agencyId).lean();
+    expect(agency?.walletBalance).toBe(5_000_000 - 600_000);
+  });
+
   it('hold rejects when fare is not in the cached search', async () => {
     const searchId = 'sX6';
     const fareToken = buildFareToken();
