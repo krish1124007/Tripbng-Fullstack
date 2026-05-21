@@ -22,6 +22,7 @@ import {
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { MapPolicy, type MapPolicyDoc } from '../models/MapPolicy.js';
 import { SupplierSource } from '../models/SupplierSource.js';
@@ -101,7 +102,10 @@ mapPolicyRouter.get(
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
       if (q.productType) filter.productType = q.productType;
       if (q.status) filter.status = q.status;
-      if (q.q) filter.name = new RegExp(q.q.trim(), 'i');
+      {
+        const re = containsRegex(q.q);
+        if (re) filter.name = re;
+      }
       if (q.mapSourceId) filter['criteria.mapSourceIds'] = q.mapSourceId;
 
       const items = await MapPolicy.find(filter)

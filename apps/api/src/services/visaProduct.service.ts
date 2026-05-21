@@ -23,6 +23,7 @@ import {
   type VisaProductDocument,
 } from '@tripbng/shared';
 import { VisaProductDocModel, type VisaProductDoc } from '../models/VisaProductDoc.js';
+import { escapeRegex } from '../utils/regex.js';
 
 // ────────── Slug derivation ──────────
 
@@ -109,7 +110,7 @@ export async function listAdminProducts(
   if (query.publishedOnly) filter.published = true;
   if (query.countryId) filter.countryId = query.countryId;
   if (query.q) {
-    const re = new RegExp(escapeRegExp(query.q), 'i');
+    const re = new RegExp(escapeRegex(query.q), 'i');
     filter.$or = [{ name: re }, { countryName: re }, { region: re }];
   }
   const docs = await VisaProductDocModel.find(filter)
@@ -197,7 +198,7 @@ export async function listPublicProducts(
   if (query.iso2) filter.countryIso2 = query.iso2.toUpperCase();
   if (query.purpose) filter.purpose = query.purpose;
   if (query.q) {
-    const re = new RegExp(escapeRegExp(query.q), 'i');
+    const re = new RegExp(escapeRegex(query.q), 'i');
     filter.$or = [{ name: re }, { countryName: re }];
   }
   const docs = await VisaProductDocModel.find(filter)
@@ -273,6 +274,4 @@ function docToDto(doc: VisaProductDoc): AdminVisaProduct {
   return { id: _id, ...(rest as unknown as Omit<AdminVisaProduct, 'id'>) };
 }
 
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+// `escapeRegExp` consolidated into utils/regex.ts (escapeRegex).

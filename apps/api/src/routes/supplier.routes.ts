@@ -9,6 +9,7 @@ import {
   UpdateSupplierSourceSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -119,8 +120,9 @@ supplierRouter.get(
         typeof PaginationQuerySchema.parse
       >;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
-      if (q) {
-        filter.$or = [{ code: new RegExp(q, 'i') }, { name: new RegExp(q, 'i') }];
+      {
+        const re = containsRegex(q);
+        if (re) filter.$or = [{ code: re }, { name: re }];
       }
       const [items, total] = await Promise.all([
         Supplier.find(filter)
@@ -309,16 +311,18 @@ supplierRouter.get(
       // sub-query (Supplier model) so we don't have to denormalise on each
       // SupplierSource row. Two-step is fine — the supplier list per tenant
       // is small (tens of rows).
-      if (q.q) {
-        const needle = new RegExp(q.q.trim(), 'i');
-        const supMatches = await Supplier.find({
-          tenantId: req.auth!.tenantId,
-          name: needle,
-        })
-          .select({ _id: 1 })
-          .lean();
-        const supIds = supMatches.map((s) => s._id);
-        filter.$or = [{ name: needle }, { supplierId: { $in: supIds } }];
+      {
+        const needle = containsRegex(q.q);
+        if (needle) {
+          const supMatches = await Supplier.find({
+            tenantId: req.auth!.tenantId,
+            name: needle,
+          })
+            .select({ _id: 1 })
+            .lean();
+          const supIds = supMatches.map((s) => s._id);
+          filter.$or = [{ name: needle }, { supplierId: { $in: supIds } }];
+        }
       }
 
       const items = await SupplierSource.find(filter)

@@ -33,10 +33,16 @@ import { isProd } from '../config/env.js';
 export const authRouter: RouterT = Router();
 
 const REFRESH_COOKIE = 'tripbng_refresh';
+// `sameSite: 'strict'` — the refresh endpoint is same-origin only (the web
+// app + API ship from the same domain in prod, separate processes but the
+// browser sees one origin via reverse-proxy). Setting strict here blocks
+// cross-site POSTs from carrying the cookie even though they trigger
+// preflight — closing the CSRF window the previous `'lax'` left open.
+// httpOnly + secure remain the primary protections.
 const REFRESH_COOKIE_OPTS = {
   httpOnly: true,
   secure: isProd,
-  sameSite: 'lax' as const,
+  sameSite: 'strict' as const,
   path: '/api/v1/auth',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };

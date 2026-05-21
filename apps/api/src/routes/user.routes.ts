@@ -16,6 +16,7 @@ import { User } from '../models/User.js';
 import { createUser, serializeUser, updateUser } from '../services/user.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { hashPassword } from '../utils/password.js';
+import { containsRegex } from '../utils/regex.js';
 
 export const userRouter: RouterT = Router();
 
@@ -33,12 +34,9 @@ userRouter.get(
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
       if (req.auth!.role === 'DISTRIBUTOR') filter.distributorId = req.auth!.distributorId;
       if (req.auth!.role === 'AGENCY') filter.agencyId = req.auth!.agencyId;
-      if (q) {
-        filter.$or = [
-          { email: new RegExp(q, 'i') },
-          { fullName: new RegExp(q, 'i') },
-          { userCode: new RegExp(q, 'i') },
-        ];
+      const re = containsRegex(q);
+      if (re) {
+        filter.$or = [{ email: re }, { fullName: re }, { userCode: re }];
       }
       const [items, total] = await Promise.all([
         User.find(filter)

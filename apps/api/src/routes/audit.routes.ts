@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AuditLogQuerySchema } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { prefixRegex } from '../utils/regex.js';
 import { ok } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -20,7 +21,10 @@ auditRouter.get(
         req.query as unknown as ReturnType<typeof AuditLogQuerySchema.parse>;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
       if (actorId) filter.actorId = actorId;
-      if (action) filter.action = new RegExp(`^${action}`);
+      {
+        const re = prefixRegex(action);
+        if (re) filter.action = re;
+      }
       if (resource) filter.resource = resource;
       if (resourceId) filter.resourceId = resourceId;
       if (from || to) {

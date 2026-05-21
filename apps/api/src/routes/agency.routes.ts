@@ -23,6 +23,7 @@ import { Agency } from '../models/Agency.js';
 import { createAgency, serializeAgency, updateAgency } from '../services/agency.service.js';
 import { recordAudit } from '../services/audit.service.js';
 import { readAgencyBalance, readAgencyBalances } from '../services/wallet/balance-reader.js';
+import { containsRegex } from '../utils/regex.js';
 
 export const agencyRouter: RouterT = Router();
 
@@ -37,8 +38,9 @@ agencyRouter.get('/', validate(PaginationQuerySchema, 'query'), async (req, res,
     if (req.auth!.role === 'DISTRIBUTOR') filter.distributorId = req.auth!.distributorId;
     if (req.auth!.role === 'AGENCY') filter._id = req.auth!.agencyId;
     if (req.auth!.role === 'SUB_AGENT') filter._id = req.auth!.agencyId;
-    if (q) {
-      filter.$or = [{ companyName: new RegExp(q, 'i') }, { agencyCode: new RegExp(q, 'i') }];
+    {
+      const re = containsRegex(q);
+      if (re) filter.$or = [{ companyName: re }, { agencyCode: re }];
     }
     const [items, total] = await Promise.all([
       Agency.find(filter)

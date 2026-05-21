@@ -7,6 +7,7 @@ import {
   UpdateAgencyGroupRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -42,7 +43,10 @@ agencyGroupRouter.get(
       if (req.auth!.role === 'DISTRIBUTOR') {
         filter.distributorId = req.auth!.distributorId;
       }
-      if (q) filter.name = new RegExp(q, 'i');
+      {
+        const re = containsRegex(q);
+        if (re) filter.name = re;
+      }
       const [items, total] = await Promise.all([
         AgencyGroup.find(filter)
           .sort({ createdAt: -1 })

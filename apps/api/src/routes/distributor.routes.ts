@@ -7,6 +7,7 @@ import {
   UpdateDistributorRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -163,8 +164,9 @@ distributorRouter.get(
         typeof PaginationQuerySchema.parse
       >;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
-      if (q) {
-        filter.$or = [{ companyName: new RegExp(q, 'i') }, { distributorCode: new RegExp(q, 'i') }];
+      {
+        const re = containsRegex(q);
+        if (re) filter.$or = [{ companyName: re }, { distributorCode: re }];
       }
       const [items, total] = await Promise.all([
         Distributor.find(filter)

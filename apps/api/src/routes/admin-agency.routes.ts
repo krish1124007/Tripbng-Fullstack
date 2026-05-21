@@ -12,6 +12,7 @@ import { AGENCY_MODULE, AppError } from '@tripbng/shared';
 import { ok } from '../utils/response.js';
 import { validate } from '../utils/validate.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
+import { requireRole } from '../middleware/rbac.js';
 import {
   setCreditConfig,
   switchAgencyModule,
@@ -44,9 +45,12 @@ import {
 
 export const adminAgencyRouter: RouterT = Router();
 
-// Every route below this line is admin-gated. The `requireSuperAdmin` check
-// itself lives inside each service for defence-in-depth.
-adminAgencyRouter.use(authenticate, requireAuth);
+// Every route below this line is admin-gated. Router-level `requireRole`
+// is the first defence; the `requireSuperAdmin` check inside each service is
+// the second layer (defence-in-depth). Before this guard the router relied
+// solely on the service-layer check — a missed call there would silently
+// expose admin operations to any authenticated user.
+adminAgencyRouter.use(authenticate, requireAuth, requireRole('SUPER_ADMIN'));
 
 function ctx(req: Parameters<typeof authenticate>[0]): AdminContext {
   return {

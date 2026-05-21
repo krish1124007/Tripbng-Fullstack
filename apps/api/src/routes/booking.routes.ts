@@ -36,6 +36,7 @@ import {
 } from '../services/booking-pdf.js';
 import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { requireNotFrozen } from '../middleware/cutover-freeze.js';
+import { containsRegex, escapeRegex, prefixRegex } from '../utils/regex.js';
 import {
   bannerSnapshotFromDoc,
   selectBannerForBooking,
@@ -185,11 +186,15 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
     const filter = listFilter(req.auth!);
     if (q.status) filter.status = q.status;
     if (q.q) {
-      filter.$or = [
-        { bookingCode: new RegExp(q.q, 'i') },
-        { pnr: new RegExp(q.q, 'i') },
-        { sector: new RegExp(q.q.toUpperCase()) },
-      ];
+      const re = containsRegex(q.q);
+      const sectorRe = new RegExp(escapeRegex(q.q.trim().toUpperCase()));
+      if (re) {
+        filter.$or = [
+          { bookingCode: re },
+          { pnr: re },
+          { sector: sectorRe },
+        ];
+      }
     }
     if (q.from || q.to) {
       const range: Record<string, Date> = {};
@@ -221,12 +226,15 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       EXPIRED: null,
     };
     const hotelFilter: Record<string, unknown> = listFilter(req.auth!);
-    if (q.q) {
-      hotelFilter.$or = [
-        { bookingCode: new RegExp(q.q, 'i') },
-        { 'hotel.name': new RegExp(q.q, 'i') },
-        { 'supplierRefs.confirmationNo': new RegExp(q.q, 'i') },
-      ];
+    {
+      const re = containsRegex(q.q);
+      if (re) {
+        hotelFilter.$or = [
+          { bookingCode: re },
+          { 'hotel.name': re },
+          { 'supplierRefs.confirmationNo': re },
+        ];
+      }
     }
     if (q.from || q.to) {
       const range: Record<string, Date> = {};
@@ -266,13 +274,16 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       EXPIRED: null,
     };
     const holidayFilter: Record<string, unknown> = listFilter(req.auth!);
-    if (q.q) {
-      holidayFilter.$or = [
-        { bookingCode: new RegExp(q.q, 'i') },
-        { packageTitle: new RegExp(q.q, 'i') },
-        { destination: new RegExp(q.q, 'i') },
-        { 'supplierRefs.confirmationNo': new RegExp(q.q, 'i') },
-      ];
+    {
+      const re = containsRegex(q.q);
+      if (re) {
+        holidayFilter.$or = [
+          { bookingCode: re },
+          { packageTitle: re },
+          { destination: re },
+          { 'supplierRefs.confirmationNo': re },
+        ];
+      }
     }
     if (q.from || q.to) {
       const range: Record<string, Date> = {};
@@ -309,13 +320,16 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       EXPIRED: null,
     };
     const visaFilter: Record<string, unknown> = listFilter(req.auth!);
-    if (q.q) {
-      visaFilter.$or = [
-        { bookingCode: new RegExp(q.q, 'i') },
-        { productName: new RegExp(q.q, 'i') },
-        { countryName: new RegExp(q.q, 'i') },
-        { 'supplierRefs.applicationNo': new RegExp(q.q, 'i') },
-      ];
+    {
+      const re = containsRegex(q.q);
+      if (re) {
+        visaFilter.$or = [
+          { bookingCode: re },
+          { productName: re },
+          { countryName: re },
+          { 'supplierRefs.applicationNo': re },
+        ];
+      }
     }
     if (q.from || q.to) {
       const range: Record<string, Date> = {};
@@ -351,14 +365,17 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       EXPIRED: null,
     };
     const busFilter: Record<string, unknown> = listFilter(req.auth!);
-    if (q.q) {
-      busFilter.$or = [
-        { bookingRef: new RegExp(q.q, 'i') },
-        { tin: new RegExp(q.q, 'i') },
-        { pnr: new RegExp(q.q, 'i') },
-        { 'trip.sourceCityName': new RegExp(q.q, 'i') },
-        { 'trip.destinationCityName': new RegExp(q.q, 'i') },
-      ];
+    {
+      const re = containsRegex(q.q);
+      if (re) {
+        busFilter.$or = [
+          { bookingRef: re },
+          { tin: re },
+          { pnr: re },
+          { 'trip.sourceCityName': re },
+          { 'trip.destinationCityName': re },
+        ];
+      }
     }
     if (q.from || q.to) {
       // Bus stores doj as "yyyy-MM-dd" string, so we can't do a Date range
@@ -415,13 +432,16 @@ bookingRouter.get('/', validate(BookingListQuerySchema, 'query'), async (req, re
       ).lean();
       insuranceFilter.createdBy = { $in: agencyUsers.map((u) => u._id) };
     }
-    if (q.q) {
-      insuranceFilter.$or = [
-        { policyNumber: new RegExp(q.q, 'i') },
-        { orderId: new RegExp(q.q, 'i') },
-        { insurerName: new RegExp(q.q, 'i') },
-        { planName: new RegExp(q.q, 'i') },
-      ];
+    {
+      const re = containsRegex(q.q);
+      if (re) {
+        insuranceFilter.$or = [
+          { policyNumber: re },
+          { orderId: re },
+          { insurerName: re },
+          { planName: re },
+        ];
+      }
     }
     // No travelDate on InsurancePolicy — startDate/endDate live in
     // quotationSnapshot. Skip date-range filtering for insurance for

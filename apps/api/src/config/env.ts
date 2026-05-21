@@ -469,6 +469,23 @@ if (!parsed.success) {
   process.exit(1);
 }
 
+// Defence-in-depth — reject the `change-me-*` placeholder secrets from
+// .env.example when running production. The Zod schema already enforces
+// `min(32)` but the placeholders satisfy that and would silently boot with
+// well-known signing keys.
+if (parsed.data.NODE_ENV === 'production') {
+  const placeholderPattern = /^change-me-/i;
+  const offenders: string[] = [];
+  if (placeholderPattern.test(parsed.data.JWT_ACCESS_SECRET)) offenders.push('JWT_ACCESS_SECRET');
+  if (placeholderPattern.test(parsed.data.JWT_REFRESH_SECRET)) offenders.push('JWT_REFRESH_SECRET');
+  if (offenders.length > 0) {
+    console.error(
+      `Refusing to boot: production environment is using the placeholder secret(s) from .env.example: ${offenders.join(', ')}. Rotate to real values.`,
+    );
+    process.exit(1);
+  }
+}
+
 export const env = parsed.data;
 export const corsOrigins = env.CORS_ORIGINS.split(',')
   .map((s) => s.trim())
