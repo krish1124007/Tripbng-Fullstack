@@ -73,6 +73,14 @@ bookingRouter.get('/:id/ticket', async (req, res, next) => {
       });
     }
     const bannerSnapshot = b.ticketTemplate?.bannerSnapshot;
+    // Resolve agency branding so signed-URL ticket downloads carry the
+    // agent's logo. This path runs pre-auth (recipient hit via
+    // WhatsApp deep-link) — we resolve from the booking doc directly
+    // rather than auth context.
+    const { resolveForBooking } = await import(
+      '../services/branding/branded-document.service.js'
+    );
+    const branding = await resolveForBooking(String(b._id));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="ticket-${b.bookingCode}.pdf"`);
     const stream = await generateETicketPdf(b, {
@@ -83,6 +91,7 @@ bookingRouter.get('/:id/ticket', async (req, res, next) => {
             title: bannerSnapshot.title,
           }
         : null,
+      branding,
     });
     stream.pipe(res);
   } catch (err) {
@@ -1530,6 +1539,11 @@ bookingRouter.get('/:id/ticket', requirePermission('booking:download'), async (r
       }
     }
 
+    // Resolve agency branding for the e-ticket header band + logo.
+    const { resolveForBooking: resolveForBookingTicket } = await import(
+      '../services/branding/branded-document.service.js'
+    );
+    const ticketBranding = await resolveForBookingTicket(String(b._id));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="ticket-${b.bookingCode}.pdf"`);
     const stream = await generateETicketPdf(b, {
@@ -1540,6 +1554,7 @@ bookingRouter.get('/:id/ticket', requirePermission('booking:download'), async (r
             title: bannerSnapshot.title,
           }
         : null,
+      branding: ticketBranding,
     });
     stream.pipe(res);
   } catch (err) {

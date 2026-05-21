@@ -4,10 +4,10 @@
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, escapeHtml, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, escapeHtml, kvTable } from './_layout.js';
 
 export const insuranceIssuedTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'INSURANCE_ISSUED') {
       throw new Error(`insuranceIssuedTemplate.email called with ${payload.event}`);
     }
@@ -19,6 +19,7 @@ export const insuranceIssuedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your travel insurance from ${v.insurerName} is active.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Travel insurance issued</h1>
 <p style="margin:0 0 16px;color:#475569;">Your travel insurance has been issued and is now active.</p>

@@ -11,7 +11,10 @@ import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils';
 
 const MAX_BYTES = 2_097_152; // 2 MiB — keep in sync with BRANDING_LOGO_MAX_BYTES.
-const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp'] as const;
+// SVG is allowed — the API runs DOMPurify (USE_PROFILES.svg) before
+// writing to disk so scripts / on-* handlers / foreignObject can't
+// land in the served file.
+const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'] as const;
 
 export interface LogoUploaderProps {
   /** Current logo URL — when set, we show a thumbnail + remove btn. */
@@ -35,7 +38,7 @@ export function LogoUploader({ currentUrl, onPicked, onRemove, busy }: LogoUploa
       const file = files?.[0];
       if (!file) return;
       if (!(ACCEPTED as readonly string[]).includes(file.type)) {
-        setError('Only PNG, JPEG, or WebP files allowed.');
+        setError('Only PNG, JPEG, WebP, or SVG files allowed.');
         return;
       }
       if (file.size > MAX_BYTES) {
@@ -98,7 +101,7 @@ export function LogoUploader({ currentUrl, onPicked, onRemove, busy }: LogoUploa
             {currentUrl ? 'Current logo' : 'Add your logo'}
           </p>
           <p className="text-xs text-ink-3">
-            PNG, JPEG, or WebP — max 2 MB. Shows on portal + documents.
+            PNG, JPEG, WebP, or SVG — max 2 MB. Shows on portal + documents.
           </p>
           {error ? (
             <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-danger">

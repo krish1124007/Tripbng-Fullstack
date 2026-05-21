@@ -2,7 +2,12 @@ import type { Metadata } from 'next';
 import { Manrope, JetBrains_Mono } from 'next/font/google';
 import { Providers } from '@/components/providers';
 import { readBrandingCookie } from '@/lib/branding-cookie';
-import { brandingStyleTag } from '@/components/branding/branding-theme-provider';
+// Import the pure helper directly from its own module. The previous
+// path went through `branding-theme-provider.tsx`, which is a
+// 'use client' module — Next.js wraps its named exports as RSC client
+// references, so calling the function from this Server Component
+// throws "brandingStyleTag is not a function" at request time.
+import { brandingStyleTag } from '@/components/branding/branding-style-tag';
 import '@/styles/globals.css';
 
 // Manrope — friendly rounded sans, complements the wordmark. Weight does the work for hierarchy.

@@ -4,7 +4,7 @@
 
 import type { AlertEvent, AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { ctaButton, emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, ctaButton, emailLayout, kvTable } from './_layout.js';
 
 const CREDIT_DUE_EVENTS = [
   'CREDIT_DUE_T_MINUS_3',
@@ -53,7 +53,7 @@ function tone(event: CreditDueEvent): {
 }
 
 export const creditDueReminderTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (!isCreditDueEvent(payload.event)) {
       throw new Error(`creditDueReminderTemplate.email called with ${payload.event}`);
     }
@@ -63,6 +63,7 @@ export const creditDueReminderTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: t.preheader,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:${t.color};">${t.heading}</h1>
 <p style="margin:0 0 16px;color:#475569;">${t.preheader}</p>

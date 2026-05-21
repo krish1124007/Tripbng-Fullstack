@@ -141,12 +141,21 @@ export async function resolveForTenant(
         // logoPath is the relative path returned by LocalStorage —
         // safeJoin inside readFile enforces the traversal boundary.
         const buf = await readFile(doc.logoPath);
+        // Note: SVG logos work end-to-end on emails (recipient's mail
+        // client loads them via public URL) but pdfkit's image()
+        // doesn't accept SVG. For the PDF data URL we deliberately
+        // skip SVG — the renderer falls back to the platform vector
+        // mark when logoDataUrl is null, which is the right behaviour.
         const mime = doc.logoPath.endsWith('.png')
           ? 'image/png'
           : doc.logoPath.endsWith('.webp')
             ? 'image/webp'
-            : 'image/jpeg';
-        logoDataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+            : doc.logoPath.endsWith('.svg')
+              ? null // skip — see note above
+              : 'image/jpeg';
+        if (mime) {
+          logoDataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+        }
       } catch (err) {
         logger.warn(
           { err: (err as Error).message, path: doc.logoPath },

@@ -2,7 +2,7 @@
 
 import type { AlertPayload, AlertTemplate, BookingAlertVars } from '../types.js';
 import { rs } from '../types.js';
-import { ctaButton, emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, ctaButton, emailLayout, kvTable } from './_layout.js';
 
 export const bookingConfirmedTemplate: AlertTemplate = {
   email(payload: AlertPayload, branding) {
@@ -14,14 +14,7 @@ export const bookingConfirmedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your e-ticket for ${v.sector} on ${v.travelDate} is ready.`,
-      branding: branding
-        ? {
-            companyName: branding.companyName,
-            primaryColor: branding.primaryColor,
-            primaryForegroundColor: branding.primaryForegroundColor,
-            logoPublicUrl: branding.logoPublicUrl,
-          }
-        : null,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Booking confirmed</h1>
 <p style="margin:0 0 16px;color:#475569;">Your booking is ticketed. The e-ticket is available below.</p>

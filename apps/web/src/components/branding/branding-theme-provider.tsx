@@ -114,23 +114,11 @@ export function BrandingThemeProvider({ initial, children }: ProviderProps) {
   return <Ctx.Provider value={{ branding, refresh }}>{children}</Ctx.Provider>;
 }
 
-/**
- * Render an inline `<style>` block carrying the four branding CSS
- * variables. Used by the SSR layout to inject the theme into <head>
- * before the React tree hydrates — kills the flash-of-default that
- * would otherwise happen on first paint of authenticated routes.
- */
-export function brandingStyleTag(branding: PublicBranding | null): string {
-  if (!branding || !branding.isActive) return '';
-  // Inline values are safe — they're all hex-validated by Zod on the
-  // API side, so no characters need escaping. We still gate by the
-  // same `#hex` regex defensively.
-  const safe = (v: string) =>
-    /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6,8})$/.test(v) ? v : '';
-  const p = safe(branding.primaryColor);
-  const ph = safe(branding.primaryHoverColor);
-  const pf = safe(branding.primaryForegroundColor);
-  const s = safe(branding.secondaryColor);
-  if (!p) return '';
-  return `:root{--color-primary:${p};--color-primary-hover:${ph};--color-primary-foreground:${pf};--color-secondary:${s};}`;
-}
+// `brandingStyleTag` was previously inlined here but had to move out of
+// this 'use client' module — Next.js wraps named exports of client
+// modules as RSC client references, which break the Server Component
+// SSR call site in `app/layout.tsx` ("brandingStyleTag is not a
+// function"). The helper now lives in `./branding-style-tag.ts` (no
+// 'use client'), and we re-export it so existing client-side import
+// sites that grabbed it from this file keep working.
+export { brandingStyleTag } from './branding-style-tag.js';

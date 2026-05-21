@@ -13,6 +13,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import sharp from 'sharp';
+import DOMPurify from 'isomorphic-dompurify';
 import { AppError } from '@tripbng/shared';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
@@ -49,9 +51,12 @@ function safeJoin(relPath: string): string {
   return abs;
 }
 
-/** Sniff the byte signature of an image buffer. SVG is deliberately
- *  not in this list — see brand schema for the reason. */
-function detectImageExt(buf: Buffer): 'png' | 'jpg' | 'webp' | null {
+/**
+ * Sniff the byte signature of an image buffer. SVG is detected as a
+ * text leading `<?xml`/`<svg` marker and sanitised separately before
+ * being persisted — see saveBrandingLogo.
+ */
+function detectImageExt(buf: Buffer): 'png' | 'jpg' | 'webp' | 'svg' | null {
   if (buf.length < 12) return null;
   // PNG: 89 50 4E 47 0D 0A 1A 0A
   if (
@@ -81,7 +86,39 @@ function detectImageExt(buf: Buffer): 'png' | 'jpg' | 'webp' | null {
   ) {
     return 'webp';
   }
+  // SVG — text. We tolerate leading whitespace + optional <?xml ... ?>
+  // prolog before the root <svg> element.
+  const head = buf.slice(0, 256).toString('utf8').trimStart();
+  if (
+    head.startsWith('<svg') ||
+    (head.startsWith('<?xml') && /<svg[\s>]/i.test(head))
+  ) {
+    return 'svg';
+  }
   return null;
+}
+
+/** Target max dimensions for raster logos — fits the header band slot. */
+const LOGO_TARGET_W = 400;
+const LOGO_TARGET_H = 120;
+
+/**
+ * Normalise an SVG: parse via DOMPurify with profile=SVG so any
+ * <script>, on* handlers, javascript: URLs, foreignObject, etc. are
+ * stripped. The cleaned SVG is what we persist; we never trust the
+ * raw upload.
+ */
+function sanitizeSvg(raw: string): string {
+  const cleaned = DOMPurify.sanitize(raw, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    // Drop any element/attribute that DOMPurify can't classify as safe.
+    FORBID_TAGS: ['script', 'foreignObject', 'iframe'],
+    FORBID_ATTR: ['onload', 'onclick', 'onmouseover', 'onerror'],
+  });
+  if (!cleaned || cleaned.length < 12) {
+    throw new AppError('VALIDATION_ERROR', { reason: 'SVG sanitised to empty' });
+  }
+  return cleaned;
 }
 
 export interface SavedBrandingLogo {
@@ -101,9 +138,17 @@ export interface SavedBrandingLogo {
  * Validate, sniff, and persist a branding logo buffer to disk under
  * branding/{subjectKind}/{subjectId}/logo-{ts}-{uuid}.<ext>.
  *
- * Returns the relative + absolute paths plus the /static URL. The
- * caller stores `relativePath` + `publicUrl` on the branding doc;
- * the absolute path is only used for cleanup.
+ * Pipeline:
+ *   1. Size + signature guard (PNG / JPEG / WebP / SVG only).
+ *   2. For raster: sharp().rotate().resize(400, 120, fit: 'inside',
+ *      withoutEnlargement: true).toFormat(<original-ext>). `.rotate()`
+ *      with no args reads the EXIF orientation and physically rotates
+ *      the pixels, then the re-encoded output drops EXIF entirely.
+ *   3. For SVG: DOMPurify sanitises out scripts, event handlers,
+ *      foreignObject, etc.
+ *   4. Final byte cap check after normalisation.
+ *
+ * Returns the relative + absolute paths plus the /static URL.
  */
 export async function saveBrandingLogo(opts: {
   subjectKind: 'AGENCY' | 'DISTRIBUTOR';
@@ -120,27 +165,62 @@ export async function saveBrandingLogo(opts: {
   const ext = detectImageExt(opts.buffer);
   if (!ext) {
     throw new AppError('VALIDATION_ERROR', {
-      reason: 'unrecognised image bytes (PNG / JPEG / WebP only)',
+      reason: 'unrecognised image bytes (PNG / JPEG / WebP / SVG only)',
     });
   }
-  // subjectId is an ObjectId hex — purely alphanumeric, so we can
-  // safely interpolate. Guard anyway: only [a-f0-9]{24}.
   if (!/^[a-fA-F0-9]{24}$/.test(opts.subjectId)) {
     throw new AppError('VALIDATION_ERROR', { reason: 'invalid subjectId' });
   }
-  const filename = `logo-${Date.now()}-${randomUUID()}.${ext}`;
+
+  let normalised: Buffer;
+  let savedExt: string = ext;
+  if (ext === 'svg') {
+    // SVG sanitiser path — text in, text out, no resize.
+    const cleaned = sanitizeSvg(opts.buffer.toString('utf8'));
+    normalised = Buffer.from(cleaned, 'utf8');
+  } else {
+    // Raster path — sharp does:
+    //   .rotate()   — bake EXIF orientation into pixels + strip EXIF
+    //   .resize()   — letterbox into 400×120 max (no enlargement)
+    //   .toFormat() — re-encode with default quality, drops metadata
+    const fmt: 'png' | 'jpeg' | 'webp' = ext === 'jpg' ? 'jpeg' : (ext as 'png' | 'webp');
+    try {
+      normalised = await sharp(opts.buffer)
+        .rotate()
+        .resize(LOGO_TARGET_W, LOGO_TARGET_H, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .toFormat(fmt)
+        .toBuffer();
+    } catch (err) {
+      throw new AppError('VALIDATION_ERROR', {
+        reason: `image normalisation failed: ${(err as Error).message}`,
+      });
+    }
+  }
+
+  // Re-check size after normalisation — a malformed input that
+  // expanded under sharp shouldn't slip past the cap.
+  if (normalised.byteLength > max) {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `normalised logo exceeds max size (${max} bytes)`,
+    });
+  }
+
+  const filename = `logo-${Date.now()}-${randomUUID()}.${savedExt}`;
   const rel = path.posix.join('branding', opts.subjectKind, opts.subjectId, filename);
   const abs = safeJoin(rel);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, opts.buffer);
-  // Public URL uses forward slashes regardless of OS path separator.
+  await fs.writeFile(abs, normalised);
   const publicUrl = `/static/${rel.replace(/\\/g, '/')}`;
   logger.info(
     {
       subjectKind: opts.subjectKind,
       subjectId: opts.subjectId,
-      bytes: opts.buffer.byteLength,
-      ext,
+      bytesIn: opts.buffer.byteLength,
+      bytesOut: normalised.byteLength,
+      ext: savedExt,
     },
     'branding.logo.saved',
   );
@@ -148,8 +228,8 @@ export async function saveBrandingLogo(opts: {
     absolutePath: abs,
     relativePath: rel,
     publicUrl,
-    ext,
-    bytes: opts.buffer.byteLength,
+    ext: savedExt,
+    bytes: normalised.byteLength,
   };
 }
 

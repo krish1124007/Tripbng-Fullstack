@@ -104,7 +104,18 @@ export interface TicketBannerSnapshot {
 
 export async function generateETicketPdf(
   booking: BookingDoc,
-  options: { banner?: TicketBannerSnapshot | null } = {},
+  options: {
+    banner?: TicketBannerSnapshot | null;
+    /**
+     * Per-tenant branding. When provided, swaps the brand-deep header
+     * band for the tenant's primaryColor and renders their logo +
+     * companyName in the top-left in place of the platform wordmark.
+     * The PNR hero block on the right side recolours its foreground
+     * text to stay readable against the new band. Falls back to the
+     * TripBng platform palette when omitted.
+     */
+    branding?: ResolvedBranding | null;
+  } = {},
 ): Promise<Readable> {
   // Pre-fetch QR codes (one per passenger) AND the banner image (when present)
   // before opening the PDF — the renderer is otherwise synchronous, and we
@@ -125,7 +136,7 @@ export async function generateETicketPdf(
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
-  drawHeaderStrip(doc, booking);
+  drawHeaderStrip(doc, booking, options.branding ?? null);
   drawStatusRow(doc, booking);
   drawJourneyHero(doc, booking);
   drawSegments(doc, booking);
@@ -133,8 +144,8 @@ export async function generateETicketPdf(
   drawFareBlock(doc, booking);
   drawEssentialInfo(doc, booking);
   drawBanner(doc, options.banner ?? null, bannerImage);
-  drawFooter(doc, booking);
-  drawCompactHeaderOnOverflowPages(doc, booking);
+  drawFooter(doc, booking, options.branding ?? null);
+  drawCompactHeaderOnOverflowPages(doc, booking, options.branding ?? null);
 
   doc.end();
   return stream;
@@ -170,35 +181,70 @@ async function fetchBannerImage(url: string): Promise<Buffer | null> {
 
 // ────────── 1. Header strip ──────────
 
-function drawHeaderStrip(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
+function drawHeaderStrip(
+  doc: PDFKit.PDFDocument,
+  booking: BookingDoc,
+  branding: ResolvedBranding | null,
+): void {
   const H = 96;
-  // Two-tone deep band — a subtle gradient effect using stacked rects.
-  doc.rect(0, 0, PAGE_W, H).fill(C.brandDeep);
-  doc.rect(0, H - 8, PAGE_W, 8).fill(C.brandDeepEdge);
+  // Header band — primaryColor when branded, brand-deep otherwise.
+  // The 8px lip at the bottom darkens the band slightly; without a
+  // computable hover we just under-opacity the same colour so the
+  // visual rhythm of the platform e-ticket is preserved.
+  const bandBg = branding?.primaryColor ?? C.brandDeep;
+  const headerFg = branding?.primaryForegroundColor ?? C.onBrandDeep;
+  const headerFgMuted = branding?.primaryForegroundColor
+    ? headerFg === '#ffffff' || headerFg === '#fff'
+      ? '#cbd5e1'
+      : '#475569'
+    : C.onBrandDeepMuted;
+
+  doc.rect(0, 0, PAGE_W, H).fill(bandBg);
+  doc.rect(0, H - 8, PAGE_W, 8).fillOpacity(0.85).fill(bandBg).fillOpacity(1);
 
   // Decorative perforation row of accent dots, top-right.
   for (let i = 0; i < 12; i++) {
     doc.circle(PAGE_W - PAD_X - 6 - i * 12, 18, 1.2).fill(C.accent);
   }
 
-  // Logo mark — accent square with white "TB" serif in italic.
-  drawLogoMark(doc, PAD_X, 22, 30);
+  // Logo: tenant-uploaded image when present, otherwise the vector
+  // brand mark. Same 30pt slot in both cases — layout below stays put.
+  if (branding?.logoDataUrl) {
+    try {
+      const b64 = branding.logoDataUrl.split(',')[1] ?? '';
+      const buf = Buffer.from(b64, 'base64');
+      doc.image(buf, PAD_X, 18, { fit: [36, 36] });
+    } catch {
+      drawLogoMark(doc, PAD_X, 22, 30);
+    }
+  } else {
+    drawLogoMark(doc, PAD_X, 22, 30);
+  }
 
-  // Wordmark.
-  doc
-    .fillColor(C.onBrandDeep)
-    .font('Times-Bold')
-    .fontSize(24)
-    .text('tripbng', PAD_X + 42, 24, { lineBreak: false });
-  doc
-    .fillColor(C.accent)
-    .font('Times-Bold')
-    .fontSize(24)
-    .text('.', PAD_X + 42 + doc.widthOfString('tripbng'), 24, { lineBreak: false });
+  // Wordmark — tenant's companyName when branded, else "tripbng" +
+  // accent dot.
+  if (branding) {
+    doc
+      .fillColor(headerFg)
+      .font('Times-Bold')
+      .fontSize(22)
+      .text(branding.companyName, PAD_X + 42, 26, { lineBreak: false });
+  } else {
+    doc
+      .fillColor(C.onBrandDeep)
+      .font('Times-Bold')
+      .fontSize(24)
+      .text('tripbng', PAD_X + 42, 24, { lineBreak: false });
+    doc
+      .fillColor(C.accent)
+      .font('Times-Bold')
+      .fontSize(24)
+      .text('.', PAD_X + 42 + doc.widthOfString('tripbng'), 24, { lineBreak: false });
+  }
 
   // Eyebrow caption under wordmark.
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .font('Helvetica')
     .fontSize(7.5)
     .text('PARTNER HUB  ·  E-TICKET  ·  v1.0', PAD_X + 42, 54, {
@@ -206,11 +252,13 @@ function drawHeaderStrip(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
       characterSpacing: 1.6,
     });
 
-  // Right side — PNR hero + booking ref + issued.
+  // Right side — PNR hero + booking ref + issued. All foreground
+  // colours follow the branded foreground so the band stays readable
+  // regardless of the primary's luminance.
   const rightBlockW = 220;
   const rx = PAGE_W - PAD_X - rightBlockW;
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .font('Helvetica')
     .fontSize(7.5)
     .text('PASSENGER NAME RECORD', rx, 24, {
@@ -220,7 +268,7 @@ function drawHeaderStrip(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
       characterSpacing: 1.6,
     });
   doc
-    .fillColor(C.onBrandDeep)
+    .fillColor(headerFg)
     .font('Courier-Bold')
     .fontSize(26)
     .text(booking.pnr ?? booking.bookingCode, rx, 36, {
@@ -229,7 +277,7 @@ function drawHeaderStrip(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
       lineBreak: false,
     });
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .font('Helvetica')
     .fontSize(8)
     .text(`BOOKING ${booking.bookingCode}`, rx, 68, {
@@ -239,7 +287,7 @@ function drawHeaderStrip(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
       characterSpacing: 0.8,
     });
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .fontSize(7.5)
     .text(`Issued ${fmtDateTime(booking.ticketedAt ?? booking.createdAt)}`, rx, 79, {
       width: rightBlockW,
@@ -247,7 +295,8 @@ function drawHeaderStrip(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
       lineBreak: false,
     });
 
-  // Bottom edge — accent hairline.
+  // Bottom edge — accent hairline. Keeps the brand accent regardless
+  // of header band colour for visual continuity with TripBng platform.
   doc.rect(0, H, PAGE_W, 1).fill(C.accent);
 
   doc.y = H + 4;
@@ -1036,19 +1085,25 @@ function drawBannerFallback(
 
 // ────────── 9. Footer ──────────
 
-function drawFooter(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
+function drawFooter(
+  doc: PDFKit.PDFDocument,
+  booking: BookingDoc,
+  branding: ResolvedBranding | null,
+): void {
+  const bandBg = branding?.primaryColor ?? C.brandDeep;
+  const bandFg = branding?.primaryForegroundColor ?? C.onBrandDeepMuted;
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(i);
     const H = 24;
     const Y = PAGE_H - H;
-    doc.rect(0, Y, PAGE_W, H).fill(C.brandDeep);
+    doc.rect(0, Y, PAGE_W, H).fill(bandBg);
     // Accent dot row.
     for (let k = 0; k < 5; k++) {
       doc.circle(PAD_X + 100 + k * 10, Y + 7, 1).fill(C.accent);
     }
     doc
-      .fillColor(C.onBrandDeepMuted)
+      .fillColor(bandFg)
       .font('Helvetica')
       .fontSize(7)
       .text(
@@ -1058,7 +1113,7 @@ function drawFooter(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
         { width: CONTENT_W, align: 'left', lineBreak: false },
       );
     doc
-      .fillColor(C.onBrandDeepMuted)
+      .fillColor(bandFg)
       .font('Courier-Bold')
       .fontSize(7)
       .text(
@@ -1079,30 +1134,56 @@ function drawFooter(doc: PDFKit.PDFDocument, booking: BookingDoc): void {
 function drawCompactHeaderOnOverflowPages(
   doc: PDFKit.PDFDocument,
   booking: BookingDoc,
+  branding: ResolvedBranding | null,
 ): void {
   const range = doc.bufferedPageRange();
   if (range.count <= 1) return; // single-page tickets don't need it
   const H = 28;
+  const bandBg = branding?.primaryColor ?? C.brandDeep;
+  const bandFg = branding?.primaryForegroundColor ?? C.onBrandDeep;
+  const bandFgMuted = branding?.primaryForegroundColor
+    ? bandFg === '#ffffff' || bandFg === '#fff'
+      ? '#cbd5e1'
+      : '#475569'
+    : C.onBrandDeepMuted;
   for (let i = 1; i < range.count; i++) {
     doc.switchToPage(i);
-    // Slim brand-deep band hugging the top of the page.
-    doc.rect(0, 0, PAGE_W, H).fill(C.brandDeep);
+    // Slim brand band hugging the top of the page.
+    doc.rect(0, 0, PAGE_W, H).fill(bandBg);
     doc.rect(0, H, PAGE_W, 1).fill(C.accent);
     // Mini logo + wordmark left.
-    drawLogoMark(doc, PAD_X, 6, 16);
-    doc
-      .fillColor(C.onBrandDeep)
-      .font('Times-Bold')
-      .fontSize(13)
-      .text('tripbng', PAD_X + 22, 8, { lineBreak: false });
-    doc
-      .fillColor(C.accent)
-      .font('Times-Bold')
-      .fontSize(13)
-      .text('.', PAD_X + 22 + doc.widthOfString('tripbng'), 8, { lineBreak: false });
+    if (branding?.logoDataUrl) {
+      try {
+        const b64 = branding.logoDataUrl.split(',')[1] ?? '';
+        const buf = Buffer.from(b64, 'base64');
+        doc.image(buf, PAD_X, 4, { fit: [20, 20] });
+      } catch {
+        drawLogoMark(doc, PAD_X, 6, 16);
+      }
+    } else {
+      drawLogoMark(doc, PAD_X, 6, 16);
+    }
+    if (branding) {
+      doc
+        .fillColor(bandFg)
+        .font('Times-Bold')
+        .fontSize(12)
+        .text(branding.companyName, PAD_X + 26, 9, { lineBreak: false });
+    } else {
+      doc
+        .fillColor(C.onBrandDeep)
+        .font('Times-Bold')
+        .fontSize(13)
+        .text('tripbng', PAD_X + 22, 8, { lineBreak: false });
+      doc
+        .fillColor(C.accent)
+        .font('Times-Bold')
+        .fontSize(13)
+        .text('.', PAD_X + 22 + doc.widthOfString('tripbng'), 8, { lineBreak: false });
+    }
     // PNR + booking ref right.
     doc
-      .fillColor(C.onBrandDeepMuted)
+      .fillColor(bandFgMuted)
       .font('Helvetica')
       .fontSize(6.5)
       .text('PNR', PAGE_W - PAD_X - 200, 8, {
@@ -1112,7 +1193,7 @@ function drawCompactHeaderOnOverflowPages(
         characterSpacing: 1.4,
       });
     doc
-      .fillColor(C.onBrandDeep)
+      .fillColor(bandFg)
       .font('Courier-Bold')
       .fontSize(13)
       .text(booking.pnr ?? booking.bookingCode, PAGE_W - PAD_X - 200, 6, {
@@ -1121,7 +1202,7 @@ function drawCompactHeaderOnOverflowPages(
         lineBreak: false,
       });
     doc
-      .fillColor(C.onBrandDeepMuted)
+      .fillColor(bandFgMuted)
       .font('Helvetica')
       .fontSize(6.5)
       .text(`BOOKING ${booking.bookingCode}`, PAGE_W - PAD_X - 200, 20, {

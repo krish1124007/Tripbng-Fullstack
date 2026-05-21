@@ -8,10 +8,10 @@
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const hotelBookingRejectedTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'HOTEL_BOOKING_REJECTED') {
       throw new Error(`hotelBookingRejectedTemplate.email called with ${payload.event}`);
     }
@@ -20,6 +20,7 @@ export const hotelBookingRejectedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `${v.decidedBy ?? 'Your manager'} declined your booking request for ${v.hotelName}.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#b91c1c;">Booking declined</h1>
 <p style="margin:0 0 16px;color:#475569;">${v.decidedBy ?? 'Your manager'} declined your booking request. No funds were debited.</p>

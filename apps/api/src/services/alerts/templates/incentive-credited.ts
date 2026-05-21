@@ -5,10 +5,10 @@
 
 import type { AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const incentiveCreditedTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'INCENTIVE_CREDITED') {
       throw new Error(`incentiveCreditedTemplate.email called with ${payload.event}`);
     }
@@ -20,6 +20,7 @@ export const incentiveCreditedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your deposit incentive has landed in your wallet.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#15803d;">Deposit incentive credited</h1>
 <p style="margin:0 0 16px;color:#475569;">Your latest deposit has been rewarded with an incentive. Net credit reflects TDS where applicable.</p>

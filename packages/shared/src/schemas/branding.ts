@@ -23,17 +23,19 @@ export const HexColorSchema = z
   .transform((v) => v.toLowerCase());
 
 /**
- * Logo uploads come in as a data URL — PNG, JPEG, or WebP only. SVG is
- * explicitly disallowed until we have a hardened sanitizer in place;
- * the brief asked for DOMPurify but it isn't installed yet.
+ * Logo uploads come in as a data URL — PNG, JPEG, WebP, or SVG. SVGs
+ * are accepted but get sanitised through DOMPurify on the API side
+ * before they hit disk (scripts, event handlers, foreignObject etc.
+ * stripped). Raster formats are resized to 400×120 max and EXIF-
+ * stripped via sharp.
  */
 export const LogoDataUrlSchema = z
   .string()
   .min(64)
   .max(5_500_000)
   .refine(
-    (s) => /^data:image\/(png|jpeg|webp);base64,/i.test(s),
-    'logo must be a data:image/(png|jpeg|webp);base64,... URL',
+    (s) => /^data:image\/(png|jpeg|webp|svg\+xml);base64,/i.test(s),
+    'logo must be a data:image/(png|jpeg|webp|svg+xml);base64,... URL',
   );
 
 export const UpdateBrandingRequestSchema = z.object({

@@ -86,6 +86,25 @@ function sanitizeHex(v: string | null | undefined): string | null {
   return /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6,8})$/.test(v) ? v : null;
 }
 
+/**
+ * Map a ResolvedBranding into the EmailLayoutBranding shape. Used by
+ * every customer-facing transactional template — keeps the per-
+ * template boilerplate to a single line:
+ *
+ *   branding: brandingForLayout(branding),
+ */
+export function brandingForLayout(
+  b: import('@tripbng/shared').ResolvedBranding | null | undefined,
+): EmailLayoutBranding | null {
+  if (!b) return null;
+  return {
+    companyName: b.companyName,
+    primaryColor: b.primaryColor,
+    primaryForegroundColor: b.primaryForegroundColor,
+    logoPublicUrl: b.logoPublicUrl,
+  };
+}
+
 /** Minimum-viable HTML escape for template-interpolated user data. */
 export function escapeHtml(s: string): string {
   return s

@@ -4,10 +4,10 @@
 
 import type { AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const adjustmentPostedTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'ADJUSTMENT_POSTED') {
       throw new Error(`adjustmentPostedTemplate.email called with ${payload.event}`);
     }
@@ -18,6 +18,7 @@ export const adjustmentPostedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Reason: ${v.reason}`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:${color};">Wallet ${verb}</h1>
 <p style="margin:0 0 16px;color:#475569;">An admin has posted a manual ${v.direction.toLowerCase()} adjustment to your wallet.</p>

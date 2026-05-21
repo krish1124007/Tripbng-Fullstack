@@ -9,7 +9,7 @@
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { ctaButton, emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, ctaButton, emailLayout, kvTable } from './_layout.js';
 
 export const hotelBookingConfirmedTemplate: AlertTemplate = {
   email(payload, branding) {
@@ -21,14 +21,7 @@ export const hotelBookingConfirmedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `${v.hotelName}, ${v.nights} night${v.nights === 1 ? '' : 's'} from ${v.checkIn}.`,
-      branding: branding
-        ? {
-            companyName: branding.companyName,
-            primaryColor: branding.primaryColor,
-            primaryForegroundColor: branding.primaryForegroundColor,
-            logoPublicUrl: branding.logoPublicUrl,
-          }
-        : null,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Booking confirmed</h1>
 <p style="margin:0 0 16px;color:#475569;">Your hotel booking is confirmed and the e-voucher is ready.</p>
