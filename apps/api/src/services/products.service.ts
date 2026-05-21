@@ -19,23 +19,24 @@ import type {
 import { logger } from '../config/logger.js';
 import {
   MockBusAdapter,
-  MockHolidayAdapter,
   MockHotelAdapter,
   MockInsuranceAdapter,
-  MockVisaAdapter,
   type BusAdapter,
-  type HolidayAdapter,
   type HotelAdapter,
   type InsuranceAdapter,
-  type VisaAdapter,
 } from '../adapters/products.mock.js';
+import {
+  defaultHolidaySupplier,
+  _setHolidaySupplier,
+} from '../adapters/holiday/registry.js';
+import type { HolidaySupplierAdapter } from '../adapters/holiday/types.js';
+import { defaultVisaSupplier, _setVisaSupplier } from '../adapters/visa/registry.js';
+import type { VisaSupplierAdapter } from '../adapters/visa/types.js';
 
-// Adapter slots — swapped in src/index.ts on boot. Keeping them as module-level
-// singletons keeps imports tight and lets us hot-swap during tests.
+// Hotel / bus / insurance still ride on the legacy single-slot pattern —
+// they'll move to per-supplier registries in their own phases (D follow-up).
 let hotelAdapter: HotelAdapter = new MockHotelAdapter();
 let busAdapter: BusAdapter = new MockBusAdapter();
-let holidayAdapter: HolidayAdapter = new MockHolidayAdapter();
-let visaAdapter: VisaAdapter = new MockVisaAdapter();
 let insuranceAdapter: InsuranceAdapter = new MockInsuranceAdapter();
 
 export function setHotelAdapter(a: HotelAdapter) {
@@ -44,11 +45,18 @@ export function setHotelAdapter(a: HotelAdapter) {
 export function setBusAdapter(a: BusAdapter) {
   busAdapter = a;
 }
-export function setHolidayAdapter(a: HolidayAdapter) {
-  holidayAdapter = a;
+/**
+ * @deprecated Phase D — holiday adapter selection now goes through the
+ *  holiday registry. Use `_setHolidaySupplier('MOCK_HOLIDAYS', adapter)` from
+ *  adapters/holiday/registry.js. This shim survives so older tests can call
+ *  the legacy hook; it routes to the same registry.
+ */
+export function setHolidayAdapter(a: HolidaySupplierAdapter) {
+  _setHolidaySupplier(a.code, a);
 }
-export function setVisaAdapter(a: VisaAdapter) {
-  visaAdapter = a;
+/** @deprecated Phase D — see setHolidayAdapter. Routes through the visa registry. */
+export function setVisaAdapter(a: VisaSupplierAdapter) {
+  _setVisaSupplier(a.code, a);
 }
 export function setInsuranceAdapter(a: InsuranceAdapter) {
   insuranceAdapter = a;
@@ -95,11 +103,16 @@ export async function searchBuses(req: BusSearchRequest): Promise<BusSearchRespo
 
 export async function searchHolidays(req: HolidaySearchRequest): Promise<HolidaySearchResponse> {
   const startedAt = Date.now();
-  const results = await holidayAdapter.search(req);
+  // For now we always dispatch to the default supplier (MOCK). When TBO
+  // Holidays ships, the booking flow will pick the right supplier via the
+  // package's `supplierCode` discriminator; until then the legacy entry
+  // point keeps the existing search-only behaviour.
+  const adapter = defaultHolidaySupplier();
+  const results = await adapter.search(req);
   logger.info(
     {
       product: 'holidays',
-      adapter: holidayAdapter.code,
+      adapter: adapter.code,
       destination: req.destination,
       results: results.length,
       ms: Date.now() - startedAt,
@@ -113,11 +126,12 @@ export async function searchHolidays(req: HolidaySearchRequest): Promise<Holiday
 
 export async function quoteVisa(req: VisaQuoteRequest): Promise<VisaQuote> {
   const startedAt = Date.now();
-  const quote = await visaAdapter.quote(req);
+  const adapter = defaultVisaSupplier();
+  const quote = await adapter.quote(req);
   logger.info(
     {
       product: 'visa',
-      adapter: visaAdapter.code,
+      adapter: adapter.code,
       country: req.country,
       applicants: req.applicants,
       ms: Date.now() - startedAt,

@@ -11,6 +11,22 @@ const EnvSchema = z.object({
    *  CORS_ORIGINS handles the multi-origin allowlist separately. */
   WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
 
+  /** Public base URL the browser uses to fetch /static/branding/* logos.
+   *  Defaults to API_BASE_URL when blank. Useful when the API sits behind
+   *  a CDN that rewrites /static. */
+  API_PUBLIC_BASE_URL: z.string().url().optional(),
+
+  /** Filesystem root for binary uploads (branding logos for now). Must
+   *  be an absolute or process-cwd-relative path. Mounted as a named
+   *  volume in Docker so files survive container rebuilds. */
+  STORAGE_ROOT: z.string().default('./storage'),
+
+  /** Max accepted logo size in bytes — 2 MiB by default. */
+  BRANDING_LOGO_MAX_BYTES: z.coerce.number().int().min(1024).default(2_097_152),
+
+  /** Resolved-branding cache TTL in seconds. */
+  BRANDING_CACHE_TTL: z.coerce.number().int().min(0).default(60),
+
   MONGO_URI: z.string().min(1),
   MONGO_POOL_SIZE: z.coerce.number().int().default(10),
 
@@ -339,6 +355,51 @@ const EnvSchema = z.object({
     .string()
     .url()
     .default('http://api.tektravels.com/BookingEngineService_Air/AirService.svc/rest'),
+  // ────────── TBO Holidays — packaged-holiday API (Phase D placeholder) ──────────
+  // Distinct from the TBO Hotel API above. Spec + sandbox URL not yet
+  // delivered by TBO; the adapter ships as a SKELETON that throws
+  // NOT_IMPLEMENTED until specs land. See
+  // apps/api/src/adapters/holiday/EMAIL_DRAFT.md.
+  TBO_HOLIDAYS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  TBO_HOLIDAYS_USERNAME: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  TBO_HOLIDAYS_PASSWORD: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /** Sandbox + production base URL for TBO Holidays. Placeholder default
+   *  — replace with the real endpoint once TBO sends it. */
+  TBO_HOLIDAYS_BASE_URL: z
+    .string()
+    .url()
+    .default('https://placeholder.tbo-holidays.tektravels.com'),
+
+  // ────────── VFS Global — visa supplier (Phase D placeholder) ──────────
+  // Spec + sandbox URL not yet delivered by VFS; the adapter ships as a
+  // SKELETON that throws NOT_IMPLEMENTED until specs land. See
+  // apps/api/src/adapters/visa/EMAIL_DRAFT.md.
+  VFS_VISA_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  VFS_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  VFS_API_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  VFS_BASE_URL: z
+    .string()
+    .url()
+    .default('https://placeholder.vfs-global.local'),
+
   /** Per-supplier search timeout. TBO sandbox routinely takes 20–25s even
    *  when returning "No result found" — and live searches can run longer
    *  with full result sets. 30s default keeps the success rate high without
