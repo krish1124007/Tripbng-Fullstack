@@ -17,6 +17,7 @@ import {
   Gift,
   LayoutDashboard,
   Megaphone,
+  Sparkles,
   Network,
   Percent,
   Receipt,
@@ -151,6 +152,7 @@ const NAV: NavGroup[] = [
     label: 'Engagement',
     items: [
       { href: '/banners', label: 'Banners', icon: Megaphone, permission: 'banner:create' },
+      { href: '/updates', label: "What's new", icon: Sparkles, permission: 'update:create' },
       { href: '/incentives', label: 'Incentives', icon: Gift, permission: 'incentive:create' },
     ],
   },

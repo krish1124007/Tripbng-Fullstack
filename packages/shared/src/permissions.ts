@@ -204,6 +204,19 @@ export const PERMISSIONS = {
   'banner:update': ['SUPER_ADMIN'],
   'banner:delete': ['SUPER_ADMIN'],
 
+  // What's-new updates (UpdatesFeed on the agency dashboard).
+  'update:create': ['SUPER_ADMIN'],
+  'update:read': [
+    'SUPER_ADMIN',
+    'DISTRIBUTOR',
+    'AGENCY',
+    'SUB_AGENT',
+    'ACCOUNTS_USER',
+    'SUPPORT_AGENT',
+  ],
+  'update:update': ['SUPER_ADMIN'],
+  'update:delete': ['SUPER_ADMIN'],
+
   // Incentives
   'incentive:create': ['SUPER_ADMIN'],
   'incentive:read': ['SUPER_ADMIN', 'DISTRIBUTOR', 'AGENCY'],

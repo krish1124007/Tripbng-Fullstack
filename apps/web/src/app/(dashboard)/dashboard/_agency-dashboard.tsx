@@ -8,7 +8,6 @@ import {
   ClipboardList,
   CreditCard,
   FileText,
-  Hotel,
   Plane,
   PlaneTakeoff,
   Receipt,
@@ -19,7 +18,8 @@ import {
   Users,
   Wallet as WalletIcon,
 } from 'lucide-react';
-import type { PublicBooking, WalletSummary } from '@tripbng/shared';
+import type { PublicBooking, PublicUpdate, WalletSummary } from '@tripbng/shared';
+import { UPDATE_ICON_MAP, relativeTime } from '@/lib/update-icons';
 import { BannerViewer } from '@/components/banner-viewer';
 import {
   Badge,
@@ -390,40 +390,12 @@ function PromoBanner() {
 }
 
 function UpdatesFeed() {
-  const updates = [
-    {
-      tag: 'New',
-      tone: 'accent' as const,
-      title: 'Series Q3 calendar is live',
-      body: 'July–September departures now bookable. Search Flights → toggle Series.',
-      icon: PlaneTakeoff,
-      time: '2 days ago',
-    },
-    {
-      tag: 'Update',
-      tone: 'brand' as const,
-      title: 'Auto-credit on top-up',
-      body: 'UPI top-ups credit instantly — no manual reconciliation needed.',
-      icon: ArrowDownToLine,
-      time: '1 week ago',
-    },
-    {
-      tag: 'New',
-      tone: 'accent' as const,
-      title: 'Hotel module connected',
-      body: 'Direct contracted hotels for Bangkok, Bali, Dubai, Maldives now searchable.',
-      icon: Hotel,
-      time: '1 week ago',
-    },
-    {
-      tag: 'Notice',
-      tone: 'neutral' as const,
-      title: 'Pax calendar in beta',
-      body: 'Quick view of who is travelling when. Open Pax calendar from Shortcuts.',
-      icon: CalendarDays,
-      time: '2 weeks ago',
-    },
-  ];
+  const list = useApiPaginatedQuery<PublicUpdate>(
+    ['updates', 'dashboard'],
+    '/api/v1/updates',
+    { query: { page: 1, limit: 6 } },
+  );
+  const updates = list.data?.data ?? [];
 
   return (
     <Card className="flex h-full flex-col">
@@ -437,37 +409,71 @@ function UpdatesFeed() {
         </Badge>
       </CardHeader>
       <CardContent className="flex-1">
-        <ul className="space-y-3">
-          {updates.map((u) => (
-            <li
-              key={u.title}
-              className="flex items-start gap-3 rounded-md border bg-surface-1 p-3 transition-colors hover:bg-surface-2"
-            >
-              <span
-                className={cn(
-                  'grid h-7 w-7 shrink-0 place-items-center rounded-md',
-                  u.tone === 'accent'
-                    ? 'bg-accent-50 text-accent-700 dark:bg-accent-500/15 dark:text-accent-400'
-                    : u.tone === 'brand'
-                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300'
-                      : 'bg-surface-2 text-ink-3',
-                )}
-              >
-                <u.icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Badge variant={u.tone} className="text-[9px]">
-                    {u.tag}
-                  </Badge>
-                  <p className="text-sm font-semibold text-ink-1">{u.title}</p>
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-ink-3">{u.body}</p>
-                <p className="mt-1.5 font-mono text-[10px] text-ink-4">{u.time}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
+        {list.isLoading ? (
+          <ul className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <li key={i} className="rounded-md border bg-surface-1 p-3">
+                <Skeleton className="h-3 w-1/3" />
+                <Skeleton className="mt-2 h-3 w-3/4" />
+                <Skeleton className="mt-2 h-3 w-1/2" />
+              </li>
+            ))}
+          </ul>
+        ) : updates.length === 0 ? (
+          <p className="rounded-md border border-dashed bg-surface-1 p-6 text-center text-xs text-ink-3">
+            No updates yet — the trade desk hasn't posted anything.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {updates.map((u) => {
+              const Icon = UPDATE_ICON_MAP[u.icon] ?? Sparkles;
+              const row = (
+                <li
+                  key={u.id}
+                  className="flex items-start gap-3 rounded-md border bg-surface-1 p-3 transition-colors hover:bg-surface-2"
+                >
+                  <span
+                    className={cn(
+                      'grid h-7 w-7 shrink-0 place-items-center rounded-md',
+                      u.tone === 'accent'
+                        ? 'bg-accent-50 text-accent-700 dark:bg-accent-500/15 dark:text-accent-400'
+                        : u.tone === 'brand'
+                          ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300'
+                          : 'bg-surface-2 text-ink-3',
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant={u.tone} className="text-[9px]">
+                        {u.tag}
+                      </Badge>
+                      <p className="text-sm font-semibold text-ink-1">{u.title}</p>
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-ink-3">{u.body}</p>
+                    <p className="mt-1.5 font-mono text-[10px] text-ink-4">
+                      {relativeTime(u.publishedAt)}
+                    </p>
+                  </div>
+                </li>
+              );
+              return u.href ? (
+                <Link
+                  key={u.id}
+                  href={u.href}
+                  target={u.href.startsWith('http') ? '_blank' : undefined}
+                  rel={u.href.startsWith('http') ? 'noopener noreferrer' : undefined}
+                  className="block"
+                >
+                  {row}
+                </Link>
+              ) : (
+                row
+              );
+            })}
+          </ul>
+        )}
       </CardContent>
     </Card>
   );
