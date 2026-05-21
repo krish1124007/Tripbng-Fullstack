@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Plus } from 'lucide-react';
+import { Paintbrush, Plus } from 'lucide-react';
 import type { PublicAgency, PublicDistributor } from '@tripbng/shared';
 import {
   Badge,
@@ -103,6 +104,24 @@ export default function AgenciesPage() {
         header: 'Status',
         accessorKey: 'status',
         cell: ({ getValue }) => <StatusBadge status={getValue() as string} />,
+      },
+      {
+        header: '',
+        id: 'actions',
+        cell: ({ row }) => (
+          // Stop propagation so clicking the icon doesn't ALSO fire
+          // the row click which opens the edit drawer.
+          <div onClick={(e) => e.stopPropagation()}>
+            <Link
+              href={`/admin/branding/AGENCY/${row.original.id}`}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-4 transition-colors hover:bg-surface-2 hover:text-brand-700"
+              title="Override branding"
+              aria-label={`Override branding for ${row.original.companyName}`}
+            >
+              <Paintbrush className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        ),
       },
     ],
     [],

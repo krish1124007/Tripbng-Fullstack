@@ -1560,37 +1560,57 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
     const filter = listFilter(req.auth!);
     filter._id = req.params.id;
     const b = await Booking.findOne(filter);
+    // Pre-import the branding resolver once — every product branch
+    // (hotel / holiday / visa / bus / flight) needs it.
+    const { resolveForAgencyOrDistributor, resolveForBooking } = await import(
+      '../services/branding/branded-document.service.js'
+    );
     if (!b) {
       // Non-flight invoice fallbacks. Hotel first, then holiday — once
       // structured invoice models ship for either, prefer them here.
       const h = await HotelBooking.findOne(filter);
       if (h) {
+        const branding = await resolveForAgencyOrDistributor(
+          h.tenantId ? String(h.tenantId) : null,
+          h.agencyId ? String(h.agencyId) : null,
+          null,
+        );
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader(
           'Content-Disposition',
           `attachment; filename="invoice-${h.bookingCode ?? String(h._id)}.pdf"`,
         );
-        generateHotelInvoicePdf(h).pipe(res);
+        generateHotelInvoicePdf(h, branding).pipe(res);
         return;
       }
       const hol = await HolidayBooking.findOne(filter);
       if (hol) {
+        const branding = await resolveForAgencyOrDistributor(
+          hol.tenantId ? String(hol.tenantId) : null,
+          hol.agencyId ? String(hol.agencyId) : null,
+          null,
+        );
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader(
           'Content-Disposition',
           `attachment; filename="invoice-${hol.bookingCode ?? String(hol._id)}.pdf"`,
         );
-        generateHolidayInvoicePdf(hol).pipe(res);
+        generateHolidayInvoicePdf(hol, branding).pipe(res);
         return;
       }
       const visa = await VisaBooking.findOne(filter);
       if (visa) {
+        const branding = await resolveForAgencyOrDistributor(
+          visa.tenantId ? String(visa.tenantId) : null,
+          visa.agencyId ? String(visa.agencyId) : null,
+          null,
+        );
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader(
           'Content-Disposition',
           `attachment; filename="invoice-${visa.bookingCode ?? String(visa._id)}.pdf"`,
         );
-        generateVisaInvoicePdf(visa).pipe(res);
+        generateVisaInvoicePdf(visa, branding).pipe(res);
         return;
       }
       const bus = await BusBooking.findOne(filter);
@@ -1605,7 +1625,12 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
         );
         const { renderBusInvoicePdf } = await import('../services/bus/invoice-pdf.js');
         const { invoice } = await generateInvoiceForBooking(bus._id);
-        const pdf = await renderBusInvoicePdf(invoice);
+        const branding = await resolveForAgencyOrDistributor(
+          bus.tenantId ? String(bus.tenantId) : null,
+          bus.agencyId ? String(bus.agencyId) : null,
+          null,
+        );
+        const pdf = await renderBusInvoicePdf(invoice, branding);
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader(
           'Content-Disposition',
@@ -1635,13 +1660,11 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
       tenantId: b.tenantId,
       bookingId: b._id,
     });
+    // Resolve the agency / distributor branding so the PDF header
+    // carries their logo + colours instead of the TripBng default.
+    // Resolver is already imported at the top of this handler.
+    const branding = await resolveForBooking(String(b._id));
     if (inv) {
-      // Resolve the agency / distributor branding so the PDF header
-      // carries their logo + colours instead of the TripBng default.
-      const { resolveForBooking } = await import(
-        '../services/branding/branded-document.service.js'
-      );
-      const branding = await resolveForBooking(String(b._id));
       const pdf = await renderFlightInvoicePdf(inv, branding);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
@@ -1656,7 +1679,7 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
     // booking's frozen pricing snapshot.
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="invoice-${b.bookingCode}.pdf"`);
-    generateInvoicePdf(b).pipe(res);
+    generateInvoicePdf(b, branding).pipe(res);
   } catch (err) {
     next(err);
   }

@@ -371,9 +371,19 @@ export interface RenderedInApp {
 }
 
 /** A template module exports this shape. Channels marked optional mean the
- *  alert isn't supported on that channel (e.g. WhatsApp for ops alerts). */
+ *  alert isn't supported on that channel (e.g. WhatsApp for ops alerts).
+ *
+ *  The optional `branding` arg on `email` lets per-tenant transactional
+ *  emails carry the agent / distributor's logo + primaryColor in the
+ *  header band. Templates that ignore the second arg fall through to
+ *  the platform default chrome — perfectly valid for internal alerts
+ *  (low-wallet-balance, ops queue events, etc.).
+ */
 export interface AlertTemplate {
-  email?: (vars: AlertPayload) => RenderedEmail;
+  email?: (
+    vars: AlertPayload,
+    branding?: import('@tripbng/shared').ResolvedBranding | null,
+  ) => RenderedEmail;
   whatsapp?: (vars: AlertPayload) => RenderedWhatsApp;
   inapp?: (vars: AlertPayload) => RenderedInApp;
 }

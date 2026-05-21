@@ -172,6 +172,24 @@ export async function resolveForTenant(
 }
 
 /**
+ * Resolve branding for an already-loaded booking doc (any product —
+ * hotel, holiday, visa, bus, flight). Saves a redundant Booking
+ * lookup vs `resolveForBooking`. Pick the agency-owned branding when
+ * agencyId is present, otherwise the distributor's, otherwise
+ * platform defaults.
+ */
+export async function resolveForAgencyOrDistributor(
+  tenantId: string | undefined | null,
+  agencyId: string | undefined | null,
+  distributorId: string | undefined | null,
+): Promise<ResolvedBranding> {
+  if (!tenantId) return platformDefaults();
+  if (agencyId) return resolveForTenant(tenantId, 'AGENCY', agencyId);
+  if (distributorId) return resolveForTenant(tenantId, 'DISTRIBUTOR', distributorId);
+  return platformDefaults();
+}
+
+/**
  * Resolve branding for a booking — looks up the booking, picks the
  * agency-owned branding if present, falls back to the distributor's
  * branding, and finally to platform defaults.

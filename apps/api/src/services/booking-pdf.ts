@@ -23,10 +23,33 @@
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import type { Readable } from 'node:stream';
+import type { ResolvedBranding } from '@tripbng/shared';
 import type { BookingDoc } from '../models/Booking.js';
 import type { HotelBookingDoc } from '../models/HotelBooking.js';
 import type { HolidayBookingDoc } from '../models/HolidayBooking.js';
 import type { VisaBookingDoc } from '../models/VisaBooking.js';
+
+/**
+ * Map a ResolvedBranding into the shape `drawPremiumHeader` expects.
+ * Centralised so every product invoice in this file threads branding
+ * identically — diffs stay tiny per call site.
+ */
+function brandingHeaderOpts(
+  branding: ResolvedBranding | null | undefined,
+): {
+  companyName: string;
+  primaryColor: string;
+  primaryForegroundColor: string;
+  logoDataUrl: string | null;
+} | null {
+  if (!branding) return null;
+  return {
+    companyName: branding.companyName,
+    primaryColor: branding.primaryColor,
+    primaryForegroundColor: branding.primaryForegroundColor,
+    logoDataUrl: branding.logoDataUrl,
+  };
+}
 import {
   PAGE as THEME_PAGE,
   drawPremiumHeader,
@@ -1211,7 +1234,10 @@ function commonStatusPills(
 // Flight invoice — legacy stub used when no structured FlightInvoice
 // exists yet. Pulls a tax-friendly receipt straight off the booking
 // snapshot.
-export function generateInvoicePdf(booking: BookingDoc): Readable {
+export function generateInvoicePdf(
+  booking: BookingDoc,
+  branding?: ResolvedBranding | null,
+): Readable {
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
@@ -1223,6 +1249,7 @@ export function generateInvoicePdf(booking: BookingDoc): Readable {
     bookingCode: booking.bookingCode,
     reference: booking.pnr ? { label: 'PNR', value: booking.pnr } : null,
     issuedAt: booking.ticketedAt ?? booking.createdAt,
+    branding: brandingHeaderOpts(branding),
   });
 
   y = drawStatusPills(doc, y, commonStatusPills(booking.status, booking.paymentStatus));
@@ -1317,7 +1344,10 @@ export function generateInvoicePdf(booking: BookingDoc): Readable {
 // card. Pulls per-night + tax-breakup rows from the booking snapshot.
 // ────────────────────────────────────────────────────────────────────────────
 
-export function generateHotelInvoicePdf(booking: HotelBookingDoc): Readable {
+export function generateHotelInvoicePdf(
+  booking: HotelBookingDoc,
+  branding?: ResolvedBranding | null,
+): Readable {
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
@@ -1332,6 +1362,7 @@ export function generateHotelInvoicePdf(booking: HotelBookingDoc): Readable {
       ? { label: 'CONF', value: booking.supplierRefs.confirmationNo }
       : null,
     issuedAt: booking.vouchredAt ?? booking.confirmedAt ?? booking.createdAt,
+    branding: brandingHeaderOpts(branding),
   });
 
   const status = booking.status ?? 'CONFIRMED';
@@ -1419,7 +1450,10 @@ export function generateHotelInvoicePdf(booking: HotelBookingDoc): Readable {
 // Holiday invoice — package-style itinerary card, per-pax fare lines.
 // ────────────────────────────────────────────────────────────────────────────
 
-export function generateHolidayInvoicePdf(booking: HolidayBookingDoc): Readable {
+export function generateHolidayInvoicePdf(
+  booking: HolidayBookingDoc,
+  branding?: ResolvedBranding | null,
+): Readable {
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
@@ -1434,6 +1468,7 @@ export function generateHolidayInvoicePdf(booking: HolidayBookingDoc): Readable 
       ? { label: 'CONF', value: booking.supplierRefs.confirmationNo }
       : null,
     issuedAt: booking.confirmedAt ?? booking.createdAt,
+    branding: brandingHeaderOpts(branding),
   });
 
   const status = booking.status ?? 'CONFIRMED';
@@ -1526,7 +1561,10 @@ export function generateHolidayInvoicePdf(booking: HolidayBookingDoc): Readable 
 // processing window) + per-applicant fee breakdown.
 // ────────────────────────────────────────────────────────────────────────────
 
-export function generateVisaInvoicePdf(booking: VisaBookingDoc): Readable {
+export function generateVisaInvoicePdf(
+  booking: VisaBookingDoc,
+  branding?: ResolvedBranding | null,
+): Readable {
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const stream = doc as unknown as Readable;
 
@@ -1541,6 +1579,7 @@ export function generateVisaInvoicePdf(booking: VisaBookingDoc): Readable {
       ? { label: 'APP', value: booking.supplierRefs.applicationNo }
       : null,
     issuedAt: booking.confirmedAt ?? booking.createdAt,
+    branding: brandingHeaderOpts(branding),
   });
 
   const status = booking.status ?? 'CONFIRMED';

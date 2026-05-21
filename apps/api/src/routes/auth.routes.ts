@@ -55,6 +55,12 @@ authRouter.post('/login', loginLimiter, validate(LoginRequestSchema), async (req
       userAgent: req.header('user-agent') ?? undefined,
     });
     res.cookie(REFRESH_COOKIE, result.refreshToken, REFRESH_COOKIE_OPTS);
+
+    // Set the branding snapshot cookie so the very first authenticated
+    // page paints the tenant theme in SSR (no flash-of-default).
+    // Non-fatal: failures here are logged and don't block login.
+    void seedBrandingCookieForUser(res, result.user).catch(() => {});
+
     return ok(res, {
       accessToken: result.accessToken,
       user: {
@@ -73,6 +79,53 @@ authRouter.post('/login', loginLimiter, validate(LoginRequestSchema), async (req
     next(err);
   }
 });
+
+/**
+ * Look up the branding for the user's agency / distributor and set
+ * the cosmetic `tripbng_branding` snapshot cookie. Resolved entirely
+ * inline — admins / accounts users (who don't own branding) get no
+ * cookie, which is exactly what we want (their portal stays the
+ * platform default).
+ */
+async function seedBrandingCookieForUser(
+  res: import('express').Response,
+  user: Awaited<ReturnType<typeof loginWithPassword>>['user'],
+): Promise<void> {
+  const { resolveBrandingPublic } = await import(
+    '../services/branding/branded-document.service.js'
+  );
+  let subjectKind: 'AGENCY' | 'DISTRIBUTOR' | null = null;
+  let subjectId: string | null = null;
+  if ((user.role === 'AGENCY' || user.role === 'SUB_AGENT') && user.agencyId) {
+    subjectKind = 'AGENCY';
+    subjectId = String(user.agencyId);
+  } else if (user.role === 'DISTRIBUTOR' && user.distributorId) {
+    subjectKind = 'DISTRIBUTOR';
+    subjectId = String(user.distributorId);
+  }
+  if (!subjectKind || !subjectId) return;
+  const pub = await resolveBrandingPublic(String(user.tenantId), subjectKind, subjectId);
+  if (!pub.isActive) return;
+  const slim = {
+    subjectKind: pub.subjectKind,
+    subjectId: pub.subjectId,
+    primaryColor: pub.primaryColor,
+    secondaryColor: pub.secondaryColor,
+    primaryHoverColor: pub.primaryHoverColor,
+    primaryForegroundColor: pub.primaryForegroundColor,
+    isActive: pub.isActive,
+    companyName: pub.companyName,
+    logoPublicUrl: pub.logoPublicUrl,
+    updatedAt: pub.updatedAt,
+  };
+  res.cookie('tripbng_branding', encodeURIComponent(JSON.stringify(slim)), {
+    httpOnly: false,
+    sameSite: 'lax',
+    secure: isProd,
+    path: '/',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+}
 
 authRouter.post('/refresh', async (req, res, next) => {
   try {
@@ -94,6 +147,9 @@ authRouter.post('/logout', async (req, res, next) => {
     const token: string | undefined = req.cookies?.[REFRESH_COOKIE];
     if (token) await revokeRefreshToken(token);
     res.clearCookie(REFRESH_COOKIE, { ...REFRESH_COOKIE_OPTS, maxAge: 0 });
+    // Wipe the cosmetic branding snapshot too so the next anonymous
+    // visitor doesn't see the previous tenant's colours/logo.
+    res.clearCookie('tripbng_branding', { path: '/' });
     return ok(res, { ok: true });
   } catch (err) {
     next(err);

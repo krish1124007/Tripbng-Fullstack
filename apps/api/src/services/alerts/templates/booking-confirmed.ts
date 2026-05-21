@@ -5,7 +5,7 @@ import { rs } from '../types.js';
 import { ctaButton, emailLayout, kvTable } from './_layout.js';
 
 export const bookingConfirmedTemplate: AlertTemplate = {
-  email(payload: AlertPayload) {
+  email(payload: AlertPayload, branding) {
     if (payload.event !== 'BOOKING_CONFIRMED') {
       throw new Error(`bookingConfirmedTemplate.email called with ${payload.event}`);
     }
@@ -14,6 +14,14 @@ export const bookingConfirmedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your e-ticket for ${v.sector} on ${v.travelDate} is ready.`,
+      branding: branding
+        ? {
+            companyName: branding.companyName,
+            primaryColor: branding.primaryColor,
+            primaryForegroundColor: branding.primaryForegroundColor,
+            logoPublicUrl: branding.logoPublicUrl,
+          }
+        : null,
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Booking confirmed</h1>
 <p style="margin:0 0 16px;color:#475569;">Your booking is ticketed. The e-ticket is available below.</p>
@@ -25,7 +33,7 @@ ${kvTable([
   ['PNR', v.pnr ?? '—'],
   ['Amount paid', rs(v.amountPaise)],
 ])}
-${v.ticketUrl ? ctaButton('Download e-ticket (PDF)', v.ticketUrl) : ''}
+${v.ticketUrl ? ctaButton('Download e-ticket (PDF)', v.ticketUrl, branding ? { primaryColor: branding.primaryColor, primaryForegroundColor: branding.primaryForegroundColor } : null) : ''}
 <p style="margin:16px 0 0;color:#64748b;font-size:13px;">Please carry a printed or digital copy of the e-ticket along with valid government ID at the airport.</p>`,
     });
     const text = renderText(v);

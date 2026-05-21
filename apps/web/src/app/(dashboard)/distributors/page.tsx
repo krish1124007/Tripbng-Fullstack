@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import type { ColumnDef } from '@tanstack/react-table';
-import { ChevronRight, Plus } from 'lucide-react';
+import { ChevronRight, Paintbrush, Plus } from 'lucide-react';
 import type { PublicDistributor } from '@tripbng/shared';
 import {
   Badge,
@@ -80,6 +81,15 @@ export default function DistributorsPage() {
         id: 'actions',
         cell: ({ row }) => (
           <div className="flex justify-end gap-2">
+            <Link
+              href={`/admin/branding/DISTRIBUTOR/${row.original.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-4 transition-colors hover:bg-surface-2 hover:text-brand-700"
+              title="Override branding"
+              aria-label={`Override branding for ${row.original.companyName}`}
+            >
+              <Paintbrush className="h-3.5 w-3.5" />
+            </Link>
             <Button
               variant="ghost"
               size="sm"

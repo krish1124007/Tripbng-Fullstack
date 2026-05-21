@@ -18,6 +18,7 @@
 // changes (opt-out toggles) take effect even if the job sat in the queue.
 
 import type { Job } from 'bullmq';
+import type { ResolvedBranding } from '@tripbng/shared';
 import { logger } from '../config/logger.js';
 import { runWithoutTenant } from '../middleware/tenant-context.js';
 import { Booking } from '../models/Booking.js';
@@ -27,6 +28,10 @@ import { sendWhatsApp } from '../services/alerts/channels/whatsapp.channel.js';
 import { resolveRecipient } from '../services/alerts/recipient-resolver.js';
 import { applyRecipientPrefs, channelsForEvent } from '../services/alerts/router.js';
 import { TEMPLATES } from '../services/alerts/templates/index.js';
+import {
+  platformDefaults,
+  resolveForBooking,
+} from '../services/branding/branded-document.service.js';
 import type {
   AlertChannel,
   AlertPayload,
@@ -78,6 +83,22 @@ export async function alertDispatchProcessor(job: Job<AlertJobData>): Promise<vo
   const baseChannels = channelsForEvent(data.event, data.channels ?? null);
   const payload = { event: data.event, vars: data.vars } as AlertPayload;
 
+  // Resolve per-tenant branding ONCE per job — every email render
+  // shares the same colour palette + logo URL. We pick the booking_
+  // contact recipient ref if present (that's the canonical "this
+  // alert belongs to a booking" marker); transactional alerts that
+  // don't carry a bookingId get platform defaults (no surprise
+  // re-branding for system events like low-wallet-balance).
+  const bookingContactRef = data.recipients.find(
+    (r): r is Extract<RecipientRef, { kind: 'booking_contact' }> =>
+      r.kind === 'booking_contact',
+  );
+  const branding: ResolvedBranding = bookingContactRef
+    ? await resolveForBooking(String(bookingContactRef.bookingId)).catch(() =>
+        platformDefaults(),
+      )
+    : platformDefaults();
+
   // Resolve every recipient once at the top — saves duplicate Mongo lookups
   // when the same agency owner is in `recipients` more than once (e.g.
   // bookedByUser === agencyOwner for sole proprietors).
@@ -123,6 +144,7 @@ export async function alertDispatchProcessor(job: Job<AlertJobData>): Promise<vo
           tenantId: data.tenantId,
           event: data.event,
           correlationKey: data.correlationKey,
+          branding,
         }),
       );
     }
@@ -178,7 +200,12 @@ async function runChannel(
   recipient: ResolvedRecipient,
   payload: AlertPayload,
   template: NonNullable<(typeof TEMPLATES)[AlertPayload['event']]>,
-  ctx: { tenantId: string; event: AlertPayload['event']; correlationKey?: string },
+  ctx: {
+    tenantId: string;
+    event: AlertPayload['event'];
+    correlationKey?: string;
+    branding: ResolvedBranding;
+  },
 ): Promise<ChannelOutcome> {
   // We wrap each channel send in runWithoutTenant() because the worker runs
   // outside the AsyncLocalStorage tenant context. The notification.service
@@ -190,7 +217,9 @@ async function runChannel(
         if (!template.email) {
           return { channel, recipient: recipient.email ?? '—', status: 'skipped', reason: 'template lacks email' };
         }
-        const rendered = template.email(payload);
+        // Pass branding as the second arg — templates that ignore it
+        // (e.g. internal ops alerts) render with platform defaults.
+        const rendered = template.email(payload, ctx.branding);
         const r = await sendEmail(recipient, rendered, { correlationKey: ctx.correlationKey });
         return { channel, recipient: recipient.email ?? '—', ...r };
       }

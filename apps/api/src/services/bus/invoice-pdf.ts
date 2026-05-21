@@ -13,6 +13,7 @@
 // Returns a Buffer — caller streams it directly or writes to disk.
 
 import PDFDocument from 'pdfkit';
+import type { ResolvedBranding } from '@tripbng/shared';
 import type { BusInvoiceDoc } from '../../models/BusInvoice.js';
 import {
   drawPremiumHeader,
@@ -25,9 +26,15 @@ import {
 } from '../pdf-theme.js';
 
 /**
- * Render a BusInvoice into a PDF buffer.
+ * Render a BusInvoice into a PDF buffer. Optional `branding` overlays
+ * the agent's logo + colours on the header band; falls back to the
+ * TripBng platform brand-deep when omitted. Call site should resolve
+ * via BrandedDocumentService.resolveForAgencyOrDistributor.
  */
-export async function renderBusInvoicePdf(invoice: BusInvoiceDoc): Promise<Buffer> {
+export async function renderBusInvoicePdf(
+  invoice: BusInvoiceDoc,
+  branding?: ResolvedBranding | null,
+): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));
@@ -41,6 +48,14 @@ export async function renderBusInvoicePdf(invoice: BusInvoiceDoc): Promise<Buffe
     bookingCode: String(invoice.bookingId),
     issuedAt: invoice.issueDate,
     invoiceNumber: invoice.invoiceNumber,
+    branding: branding
+      ? {
+          companyName: branding.companyName,
+          primaryColor: branding.primaryColor,
+          primaryForegroundColor: branding.primaryForegroundColor,
+          logoDataUrl: branding.logoDataUrl,
+        }
+      : null,
   });
 
   y = drawStatusPills(doc, y, [
