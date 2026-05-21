@@ -81,6 +81,31 @@ export const tailwindPreset = {
           strong: 'var(--border-2)',
         },
         ring: 'var(--ring)',
+        /**
+         * Per-tenant branding tokens. `primary` and `secondary` are
+         * NOT used by existing platform UI — they're the canvas the
+         * tenant paints on. The CSS variables are populated by
+         * `BrandingThemeProvider` from the resolved branding doc; if
+         * no doc exists they stay at the TripBng platform defaults
+         * baked into globals.css.
+         *
+         * Use these for:
+         *   - The portal sidebar / topbar logo + primary CTAs the
+         *     tenant should be able to customise
+         *   - Document headers / PDF accents (mirrored as fields on
+         *     ResolvedBranding for the pdfkit pipeline)
+         *
+         * Do NOT use these for system / status UI — keep `brand`,
+         * `accent`, `success`, etc. for that.
+         */
+        primary: {
+          DEFAULT: 'var(--color-primary)',
+          hover: 'var(--color-primary-hover)',
+          foreground: 'var(--color-primary-foreground)',
+        },
+        secondary: {
+          DEFAULT: 'var(--color-secondary)',
+        },
       },
       borderColor: {
         DEFAULT: 'var(--border-1)',

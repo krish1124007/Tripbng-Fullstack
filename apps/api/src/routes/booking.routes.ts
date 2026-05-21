@@ -1636,7 +1636,13 @@ bookingRouter.get('/:id/invoice', requirePermission('booking:download'), async (
       bookingId: b._id,
     });
     if (inv) {
-      const pdf = await renderFlightInvoicePdf(inv);
+      // Resolve the agency / distributor branding so the PDF header
+      // carries their logo + colours instead of the TripBng default.
+      const { resolveForBooking } = await import(
+        '../services/branding/branded-document.service.js'
+      );
+      const branding = await resolveForBooking(String(b._id));
+      const pdf = await renderFlightInvoicePdf(inv, branding);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',

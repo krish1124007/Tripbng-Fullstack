@@ -190,6 +190,19 @@ export interface PremiumHeaderOptions {
   issuedAt: Date;
   /** Optional invoice number — shown on the right in mono. */
   invoiceNumber?: string | null;
+  /**
+   * Per-tenant branding — when provided, swaps the platform header
+   * bar colour for the tenant's primaryColor, drops in their logo
+   * (PNG/JPEG base64 data URL), and uses their companyName as the
+   * wordmark. Falls back to TripBng defaults when omitted.
+   */
+  branding?: {
+    companyName: string;
+    primaryColor: string;
+    primaryForegroundColor: string;
+    /** data:image/...;base64,... — pdfkit's image() takes this directly. */
+    logoDataUrl: string | null;
+  } | null;
 }
 
 /**
@@ -203,35 +216,58 @@ export function drawPremiumHeader(
   opts: PremiumHeaderOptions,
 ): number {
   const H = 96;
-  doc.rect(0, 0, PAGE.W, H).fill(C.brandDeep);
-  doc.rect(0, H - 8, PAGE.W, 8).fill(C.brandDeepEdge);
+  // Brand-deep band — uses the tenant's primaryColor when branding is
+  // passed, falls back to the TripBng platform brand-deep blue.
+  const headerBg = opts.branding?.primaryColor ?? C.brandDeep;
+  const headerFg = opts.branding?.primaryForegroundColor ?? C.onBrandDeep;
+  const headerFgMuted = opts.branding?.primaryForegroundColor
+    ? // Approximate "muted" foreground — 65% opacity-equivalent in mono.
+      headerFg === '#ffffff' || headerFg === '#fff'
+        ? '#cbd5e1'
+        : '#475569'
+    : C.onBrandDeepMuted;
+
+  doc.rect(0, 0, PAGE.W, H).fill(headerBg);
+  doc.rect(0, H - 8, PAGE.W, 8).fillOpacity(0.85).fill(headerBg).fillOpacity(1);
 
   // Decorative perforation dots, top-right.
   for (let i = 0; i < 12; i++) {
     doc.circle(PAGE.W - PAGE.PAD_X - 6 - i * 12, 18, 1.2).fill(C.accent);
   }
 
-  // Logo + wordmark, top-left.
-  drawLogoMark(doc, PAGE.PAD_X, 22, 30);
+  // Logo + wordmark, top-left. Tenant logo (if any) takes the same
+  // 30pt height slot as the platform mark so the rest of the layout
+  // doesn't shift.
+  const wordmarkX = PAGE.PAD_X + 42;
+  if (opts.branding?.logoDataUrl) {
+    try {
+      // pdfkit can decode a base64 data URL directly via Buffer.from.
+      const b64 = opts.branding.logoDataUrl.split(',')[1] ?? '';
+      const buf = Buffer.from(b64, 'base64');
+      // 36×36 box, letter-boxed by pdfkit's `fit` option so the
+      // aspect ratio stays correct.
+      doc.image(buf, PAGE.PAD_X, 18, { fit: [36, 36] });
+    } catch {
+      // If anything goes wrong (bad bytes, unsupported format),
+      // fall back to the vector mark.
+      drawLogoMark(doc, PAGE.PAD_X, 22, 30);
+    }
+  } else {
+    drawLogoMark(doc, PAGE.PAD_X, 22, 30);
+  }
+  const wordmark = opts.branding?.companyName ?? 'tripbng';
   doc
-    .fillColor(C.onBrandDeep)
+    .fillColor(headerFg)
     .font('Times-Bold')
-    .fontSize(24)
-    .text('tripbng', PAGE.PAD_X + 42, 24, { lineBreak: false });
-  doc
-    .fillColor(C.accent)
-    .font('Times-Bold')
-    .fontSize(24)
-    .text('.', PAGE.PAD_X + 42 + doc.widthOfString('tripbng'), 24, {
-      lineBreak: false,
-    });
+    .fontSize(22)
+    .text(wordmark, wordmarkX, 26, { lineBreak: false });
 
   // Eyebrow under wordmark: PARTNER HUB · TAX INVOICE · PRODUCT
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .font('Helvetica')
     .fontSize(7.5)
-    .text(`PARTNER HUB  ·  ${opts.title.toUpperCase()}  ·  ${opts.product.toUpperCase()}`, PAGE.PAD_X + 42, 54, {
+    .text(`PARTNER HUB  ·  ${opts.title.toUpperCase()}  ·  ${opts.product.toUpperCase()}`, wordmarkX, 54, {
       lineBreak: false,
       characterSpacing: 1.6,
     });
@@ -241,7 +277,7 @@ export function drawPremiumHeader(
   const rx = PAGE.W - PAGE.PAD_X - rightBlockW;
   if (opts.invoiceNumber) {
     doc
-      .fillColor(C.onBrandDeepMuted)
+      .fillColor(headerFgMuted)
       .font('Helvetica')
       .fontSize(7.5)
       .text('INVOICE', rx, 24, {
@@ -251,7 +287,7 @@ export function drawPremiumHeader(
         characterSpacing: 1.6,
       });
     doc
-      .fillColor(C.onBrandDeep)
+      .fillColor(headerFg)
       .font('Courier-Bold')
       .fontSize(13)
       .text(opts.invoiceNumber, rx, 35, {
@@ -262,7 +298,7 @@ export function drawPremiumHeader(
   }
   // Hero booking code in mono.
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .font('Helvetica')
     .fontSize(7.5)
     .text('BOOKING REF', rx, 53, {
@@ -272,7 +308,7 @@ export function drawPremiumHeader(
       characterSpacing: 1.6,
     });
   doc
-    .fillColor(C.onBrandDeep)
+    .fillColor(headerFg)
     .font('Courier-Bold')
     .fontSize(14)
     .text(opts.bookingCode, rx, 64, {
@@ -282,7 +318,7 @@ export function drawPremiumHeader(
     });
   // Issued.
   doc
-    .fillColor(C.onBrandDeepMuted)
+    .fillColor(headerFgMuted)
     .font('Helvetica')
     .fontSize(7.5)
     .text(`Issued ${fmtDateTime(opts.issuedAt)}`, rx, 81, {

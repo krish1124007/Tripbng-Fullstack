@@ -14,6 +14,7 @@ import { idempotencyKey } from './middleware/idempotency.js';
 import { sentryErrorHandler } from './config/sentry.js';
 import { healthRouter } from './routes/health.routes.js';
 import { apiRouter } from './routes/index.js';
+import { STORAGE_ROOT_ABS } from './services/storage/local-storage.service.js';
 
 export function createApp(): Express {
   const app = express();
@@ -81,6 +82,19 @@ export function createApp(): Express {
 
   // Health endpoints — bypass /api versioning, used by load balancers
   app.use(healthRouter);
+
+  // Branding logos + future binary assets. Served with long-cache +
+  // immutable since every saved file lives at a UUID-suffixed path
+  // (no reuse). Dotfiles denied to keep .gitkeep etc. invisible.
+  app.use(
+    '/static',
+    express.static(STORAGE_ROOT_ABS, {
+      maxAge: '1y',
+      immutable: true,
+      dotfiles: 'deny',
+      fallthrough: false,
+    }),
+  );
 
   // Idempotency-Key honouring on every mutating route below /api/v1.
   // Advisory mode: missing header is allowed (clients without the key still

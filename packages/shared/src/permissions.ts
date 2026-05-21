@@ -217,6 +217,13 @@ export const PERMISSIONS = {
   'update:update': ['SUPER_ADMIN'],
   'update:delete': ['SUPER_ADMIN'],
 
+  // Per-tenant branding — agency / distributor logo + colour theme.
+  // Owners (AGENCY/DISTRIBUTOR) manage their own; SUPER_ADMIN can
+  // override on behalf of any subject from the admin panel.
+  'branding:read:own': ['AGENCY', 'SUB_AGENT', 'DISTRIBUTOR'],
+  'branding:update:own': ['AGENCY', 'DISTRIBUTOR'],
+  'branding:admin': ['SUPER_ADMIN'],
+
   // Incentives
   'incentive:create': ['SUPER_ADMIN'],
   'incentive:read': ['SUPER_ADMIN', 'DISTRIBUTOR', 'AGENCY'],

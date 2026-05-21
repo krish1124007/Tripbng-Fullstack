@@ -33,3 +33,4 @@ export * from './approval.js';
 export * from './gst-profile.js';
 export * from './saved-passenger.js';
 export * from './update.js';
+export * from './branding.js';

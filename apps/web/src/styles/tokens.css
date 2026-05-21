@@ -2,6 +2,18 @@
 
 :root,
 [data-theme='light'] {
+  /* ────────── per-tenant branding ──────────
+     Defaults used at first paint; BrandingThemeProvider overrides
+     these via inline styles on :root once the tenant's resolved
+     branding has been fetched (SSR injection in app/layout.tsx
+     prevents the flash-of-default for already-authenticated users).
+     Edit BRANDING_DEFAULTS in packages/shared/src/schemas/branding.ts
+     to change the platform defaults — keep this in sync. */
+  --color-primary: #0f62fe;
+  --color-primary-hover: #0050d8;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #10b981;
+
   /* ────────── brand ──────────
      Brand blue from the logo. The 500 is screen-tuned (a touch brighter for digital).
      Use 600/700 for hover/pressed states; 50/100 for soft fills. */

@@ -49,3 +49,8 @@ docs/api/openapi.yaml
 
 # Local DB volumes
 infra/docker/data
+
+# Branding logos + other binary uploads — STORAGE_ROOT contents.
+# Keep the directory tracked (.gitkeep) but ignore everything else.
+apps/api/storage/*
+!apps/api/storage/.gitkeep

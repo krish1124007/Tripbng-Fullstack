@@ -118,6 +118,30 @@ const EnvSchema = z.object({
   ASEGO_CACHE_TTL_MASTER: z.coerce.number().int().default(86_400),
   ASEGO_CACHE_TTL_REASONS: z.coerce.number().int().default(2_592_000),
 
+  // Sentry — backend error tracking. Empty DSN disables the integration
+  // (captureException routes to pino at error-level instead). The DSN is
+  // safe to bake into a public client config (it's a write-only token),
+  // but we read it from env for runtime injection across environments.
+  SENTRY_DSN: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /** Fraction of transactions sampled for performance traces. 0.0 = off,
+   *  1.0 = every request. 0.1 = 10% — sensible default for prod. */
+  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
+  /** Free-text label to differentiate environments on the Sentry side
+   *  ("production", "staging", "dev"). Defaults to NODE_ENV. */
+  SENTRY_ENVIRONMENT: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /** Release identifier — useful when source maps are uploaded so
+   *  stack traces resolve to git refs. Format: `app@version+sha`. */
+  SENTRY_RELEASE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+
   // PostHog — backend product analytics. Empty key disables the integration
   // (track() becomes a no-op). Project key is the same value the frontend uses;
   // backend events get tagged with `$lib: 'tripbng-api'` so PostHog can split.

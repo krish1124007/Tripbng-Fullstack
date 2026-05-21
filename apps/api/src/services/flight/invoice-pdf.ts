@@ -13,6 +13,7 @@
 //   6. Slim brand-deep footer
 
 import PDFDocument from 'pdfkit';
+import type { ResolvedBranding } from '@tripbng/shared';
 import type { FlightInvoiceDoc } from '../../models/FlightInvoice.js';
 import {
   drawPremiumHeader,
@@ -28,7 +29,17 @@ import {
 /**
  * Render a FlightInvoice into a PDF buffer.
  */
-export async function renderFlightInvoicePdf(invoice: FlightInvoiceDoc): Promise<Buffer> {
+/**
+ * Render a FlightInvoice into a PDF buffer. Optional `branding` overlays
+ * the agent's logo + colour palette on the header; falls back to the
+ * TripBng platform brand-deep when omitted. Use
+ * BrandedDocumentService.resolveForBooking(invoice.bookingId) at the
+ * call site to populate the branding argument.
+ */
+export async function renderFlightInvoicePdf(
+  invoice: FlightInvoiceDoc,
+  branding?: ResolvedBranding | null,
+): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));
@@ -44,6 +55,14 @@ export async function renderFlightInvoicePdf(invoice: FlightInvoiceDoc): Promise
     bookingCode: String(invoice.bookingId),
     issuedAt: invoice.issueDate,
     invoiceNumber: invoice.invoiceNumber,
+    branding: branding
+      ? {
+          companyName: branding.companyName,
+          primaryColor: branding.primaryColor,
+          primaryForegroundColor: branding.primaryForegroundColor,
+          logoDataUrl: branding.logoDataUrl,
+        }
+      : null,
   });
 
   y = drawStatusPills(doc, y, [
