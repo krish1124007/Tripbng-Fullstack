@@ -42,6 +42,10 @@ import {
   diPayoutToPdf,
   diPayoutToXlsx,
 } from '../services/wallet/report-exporters.js';
+import {
+  form26QToCsv,
+  runForm26QExport,
+} from '../services/tax/form-26q.service.js';
 
 export const adminAgencyRouter: RouterT = Router();
 
@@ -608,6 +612,49 @@ adminAgencyRouter.get(
       if (query.format === 'pdf') {
         attachDownloadHeaders(res, 'pdf', 'di-payouts');
         diPayoutToPdf(report).pipe(res);
+        return;
+      }
+      return ok(res, report);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /admin/reports/form-26q?fy=2025-26&quarter=Q1
+//   Quarterly TDS-return preparation. JSON for the admin UI; CSV for direct
+//   import into the NSDL RPU. `warnings` flags filing-blocking gaps in the
+//   deductee master (missing PAN / deductee category) so the accountant
+//   knows what to backfill before running FVU.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Form26QQuerySchema = z.object({
+  fy: z.string().regex(/^\d{4}-\d{2}$/, { message: 'fy must look like 2025-26' }),
+  quarter: z.enum(['Q1', 'Q2', 'Q3', 'Q4']),
+  format: z.enum(['json', 'csv']).default('json'),
+});
+
+adminAgencyRouter.get(
+  '/reports/form-26q',
+  validate(Form26QQuerySchema, 'query'),
+  async (req, res, next) => {
+    try {
+      if (req.auth!.role !== 'SUPER_ADMIN') throw new AppError('FORBIDDEN');
+      const query = req.query as unknown as ReturnType<typeof Form26QQuerySchema.parse>;
+      const report = await runForm26QExport({
+        tenantId: req.auth!.tenantId,
+        financialYear: query.fy,
+        quarter: query.quarter,
+      });
+      if (query.format === 'csv') {
+        const csv = form26QToCsv(report);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="form-26q-${query.fy}-${query.quarter}.csv"`,
+        );
+        res.send(csv);
         return;
       }
       return ok(res, report);

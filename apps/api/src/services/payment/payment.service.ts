@@ -529,6 +529,204 @@ export class PaymentService {
     return pt;
   }
 
+  // ────────── Refund state transitions ──────────
+  //
+  // The refund lifecycle:
+  //   SUCCESS → REFUND_INITIATED   (we received a refund-accepted webhook OR
+  //                                  the provider's refund() call returned
+  //                                  INITIATED — the gateway acknowledged
+  //                                  the request but hasn't settled)
+  //   REFUND_INITIATED → REFUNDED  (refund-completed webhook OR provider
+  //                                  returned COMPLETED synchronously — at
+  //                                  this moment we MUST debit the wallet
+  //                                  so our balance stays truthful)
+  //   REFUND_INITIATED → FAILED    (refund-failed webhook — undo the
+  //                                  INITIATED transition; no wallet impact)
+  //
+  // Waterfall caveat: if the original topup was applied through the credit-
+  // settlement waterfall (env.WATERFALL_LIVE && agencyId), reversing it
+  // cleanly would require unwinding the split between WALLET / CREDIT /
+  // DEPOSIT_INCENTIVE / TDS_DEDUCT. We don't attempt that here — instead we
+  // mark the PT REFUNDED, emit a `gatewayResponsePayload` audit, and rely
+  // on the ops alert + manual reconciliation. The booking gate already
+  // refuses further drawdown when the agency owes money.
+
+  async markRefundInitiated(
+    paymentTxnId: Types.ObjectId,
+    details: {
+      gatewayRefundId?: string;
+      gatewayResponsePayload?: Record<string, unknown>;
+      reason?: string;
+    },
+  ): Promise<PaymentTransactionDoc> {
+    const pt = await PaymentTransaction.findById(paymentTxnId);
+    if (!pt) throw new AppError('NOT_FOUND');
+    if (pt.status === 'REFUND_INITIATED' || pt.status === 'REFUNDED') return pt;
+    if (!isValidTransition(pt.status, 'REFUND_INITIATED')) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `cannot transition ${pt.status} → REFUND_INITIATED`,
+        pt.providerCode as PaymentProviderCode,
+      );
+    }
+    pushStatusHistory(pt, 'REFUND_INITIATED', {
+      reason: details.reason ?? 'refund requested',
+      actor: 'WEBHOOK',
+    });
+    pt.status = 'REFUND_INITIATED';
+    if (details.gatewayRefundId) pt.gatewayPaymentId = details.gatewayRefundId;
+    if (details.gatewayResponsePayload !== undefined) {
+      pt.gatewayResponsePayload = details.gatewayResponsePayload;
+    }
+    await pt.save();
+    logger.info(
+      {
+        provider: pt.providerCode,
+        txnCode: pt.txnCode,
+        gatewayRefundId: details.gatewayRefundId,
+      },
+      'payment refund initiated',
+    );
+    return pt;
+  }
+
+  async markRefunded(
+    paymentTxnId: Types.ObjectId,
+    details: {
+      gatewayRefundId?: string;
+      gatewayResponsePayload?: Record<string, unknown>;
+      webhookPayloadId?: Types.ObjectId;
+    },
+  ): Promise<PaymentTransactionDoc> {
+    const pt = await PaymentTransaction.findById(paymentTxnId);
+    if (!pt) throw new AppError('NOT_FOUND');
+    if (pt.status === 'REFUNDED') return pt; // idempotent
+    if (!isValidTransition(pt.status, 'REFUNDED')) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `cannot transition ${pt.status} → REFUNDED`,
+        pt.providerCode as PaymentProviderCode,
+      );
+    }
+
+    // Debit the wallet to reverse the original topup. Idempotent via
+    // `pt-${id}-refund` key so duplicate refund-completed webhooks are safe.
+    // We use `allowNegative: true` because the topup may have been spent;
+    // the agency now owes the platform until they re-topup.
+    //
+    // For waterfall'd topups we still post a single TOPUP_REVERSAL row —
+    // ops gets paged via the alert below and manually unwinds the credit-
+    // settlement + DI / TDS legs. Doing it inline would double-spend the
+    // reversal logic into the waterfall service.
+    const wasWaterfall = env.WATERFALL_LIVE && !!pt.agencyId;
+    const idempotencyKey = `pt-${pt._id.toHexString()}-refund`;
+    let walletReversalTxnId: Types.ObjectId | null = null;
+    try {
+      const reversal = await walletService.debit({
+        walletId: pt.walletId,
+        amount: pt.amount,
+        type: 'TOPUP_REVERSAL',
+        description: `Refund of ${pt.txnCode} (gateway-pushed)`,
+        performedBy: 'SYSTEM',
+        paymentTransactionId: pt._id,
+        relatedTxnId: pt.walletTransactionId ?? null,
+        idempotencyKey,
+        allowNegative: true,
+        metadata: {
+          providerCode: pt.providerCode,
+          gatewayRefundId: details.gatewayRefundId,
+          waterfallOriginal: wasWaterfall,
+        },
+      });
+      walletReversalTxnId = reversal._id;
+    } catch (err) {
+      logger.error(
+        { err, txnCode: pt.txnCode, gatewayRefundId: details.gatewayRefundId },
+        'markRefunded: wallet debit FAILED — PT state still flipped to REFUNDED, ops must reconcile manually',
+      );
+      // Continue to mark REFUNDED anyway — the money DID leave the gateway,
+      // and silently leaving the PT in REFUND_INITIATED is worse than a
+      // ledger-mismatch row in the audit log.
+    }
+
+    pushStatusHistory(pt, 'REFUNDED', {
+      reason: 'gateway confirmed refund settled',
+      actor: 'WEBHOOK',
+    });
+    pt.status = 'REFUNDED';
+    pt.refundedAt = new Date();
+    if (details.gatewayRefundId) pt.gatewayPaymentId = details.gatewayRefundId;
+    if (details.gatewayResponsePayload !== undefined) {
+      pt.gatewayResponsePayload = details.gatewayResponsePayload;
+    }
+    if (details.webhookPayloadId) {
+      pt.webhookPayloadId = details.webhookPayloadId;
+      pt.webhookReceivedAt = new Date();
+    }
+    await pt.save();
+
+    logger.info(
+      {
+        provider: pt.providerCode,
+        txnCode: pt.txnCode,
+        amount: pt.amount,
+        gatewayRefundId: details.gatewayRefundId,
+        walletReversalTxnId: walletReversalTxnId?.toHexString(),
+        wasWaterfall,
+      },
+      'payment refunded — wallet reversed',
+    );
+    return pt;
+  }
+
+  async markRefundFailed(
+    paymentTxnId: Types.ObjectId,
+    details: {
+      failureCode?: string;
+      failureReason?: string;
+      gatewayResponsePayload?: Record<string, unknown>;
+    },
+  ): Promise<PaymentTransactionDoc> {
+    const pt = await PaymentTransaction.findById(paymentTxnId);
+    if (!pt) throw new AppError('NOT_FOUND');
+    // Only meaningful from REFUND_INITIATED. From any other state the gateway
+    // can't actually fail a refund (because no refund was ever requested).
+    if (pt.status !== 'REFUND_INITIATED') {
+      logger.warn(
+        { txnCode: pt.txnCode, status: pt.status },
+        'markRefundFailed called on non-REFUND_INITIATED PT — ignoring',
+      );
+      return pt;
+    }
+    if (!isValidTransition(pt.status, 'FAILED')) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `cannot transition ${pt.status} → FAILED (refund-failed)`,
+        pt.providerCode as PaymentProviderCode,
+      );
+    }
+    pushStatusHistory(pt, 'FAILED', {
+      reason: details.failureReason ?? details.failureCode ?? 'refund failed',
+      actor: 'WEBHOOK',
+    });
+    pt.status = 'FAILED';
+    pt.failureCode = details.failureCode ?? 'REFUND_FAILED';
+    pt.failureReason = details.failureReason ?? 'gateway reported refund failure';
+    if (details.gatewayResponsePayload !== undefined) {
+      pt.gatewayResponsePayload = details.gatewayResponsePayload;
+    }
+    await pt.save();
+    logger.warn(
+      {
+        provider: pt.providerCode,
+        txnCode: pt.txnCode,
+        failureCode: pt.failureCode,
+      },
+      'payment refund FAILED — wallet untouched',
+    );
+    return pt;
+  }
+
   // ────────── Sweep ──────────
 
   /** For PTs in PENDING/PROCESSING > 30 min, ask the provider for status.

@@ -6,7 +6,12 @@ import mongoose, {
   type Model,
   type Types,
 } from 'mongoose';
-import { AGENCY_BLOCK_REASON, AGENCY_MODULE, AGENCY_STATUS } from '@tripbng/shared';
+import {
+  AGENCY_BLOCK_REASON,
+  AGENCY_MODULE,
+  AGENCY_STATUS,
+  DEDUCTEE_CATEGORY,
+} from '@tripbng/shared';
 
 const AgencySchema = new Schema(
   {
@@ -76,8 +81,21 @@ const AgencySchema = new Schema(
 
     pan: {
       number: { type: String, select: false },
+      // Legal name exactly as it appears on the PAN card. Different from
+      // `companyName` (the trading/display name). Form 16A + Form 26Q both
+      // require the on-PAN name verbatim — mismatches with the IT-dept
+      // master cause the deductee row to be rejected at FVU validation.
       name: { type: String },
       imageUrl: { type: String },
+      // Deductee classification for Form 26Q + 16A. Drives the NSDL
+      // `deductee_code` field (1=Individual, 3=Company, 4=Firm/LLP, …).
+      // Required before any TDS-bearing payout (incentive credit) can post
+      // — the DI-incentive worker should refuse to deduct TDS if missing.
+      deducteeCategory: {
+        type: String,
+        enum: DEDUCTEE_CATEGORY,
+        default: null,
+      },
     },
     gst: {
       number: { type: String },

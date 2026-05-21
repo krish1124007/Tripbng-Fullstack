@@ -84,6 +84,12 @@ const NAV: NavGroup[] = [
         icon: Gift,
         permission: 'report:platform',
       },
+      {
+        href: '/admin/reports/form-26q',
+        label: 'Form 26Q',
+        icon: Receipt,
+        permission: 'report:platform',
+      },
       { href: '/audit-logs', label: 'Audit log', icon: ShieldCheck, permission: 'audit:read' },
     ],
   },

@@ -19,6 +19,8 @@ import {
   type PaymentCapability,
   type PaymentProvider,
   type RawWebhookRequest,
+  type RefundRequest,
+  type RefundResponse,
   type VerifyPaymentRequest,
   type VerifyPaymentResponse,
   type WebhookPayload,
@@ -169,6 +171,73 @@ export class PhonePeProvider implements PaymentProvider {
     };
   }
 
+  async refund(req: RefundRequest): Promise<RefundResponse> {
+    // PhonePe V2 refund — POST /payments/v2/refund.
+    // Spec:
+    //   merchantRefundId           — our unique refund-side reference
+    //   originalMerchantOrderId    — the merchantOrderId from /pay
+    //   amount                     — paise, must be <= original
+    // Response carries `refundId` (gateway ref) + `state` (PENDING / COMPLETED / FAILED).
+    // PhonePe pushes a separate webhook later (pg.refund.completed / .failed) — we
+    // map that in the webhook worker. Synchronous response is "accepted" not "settled".
+    const token = await this.getAccessToken();
+    const payload = {
+      merchantRefundId: req.refundCode,
+      originalMerchantOrderId: req.paymentTransactionCode,
+      amount: req.amountPaise,
+    };
+
+    const res = await this.fetch('/payments/v2/refund', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `O-Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const text = await safeText(res);
+      logger.warn(
+        {
+          provider: 'PHONEPE',
+          merchantRefundId: req.refundCode,
+          status: res.status,
+          body: text.slice(0, 500),
+        },
+        'phonepe refund failed',
+      );
+      // Hard failures are mapped to FAILED so the caller can roll back wallet
+      // state if it had optimistically transitioned. 4xx vs 5xx is preserved
+      // in `failureReason` for diagnostics.
+      return {
+        status: 'FAILED',
+        failureReason: `PhonePe refund failed (${res.status}): ${text.slice(0, 200)}`,
+      };
+    }
+
+    const body = (await res.json()) as {
+      refundId?: string;
+      state?: string;
+      amount?: number;
+      message?: string;
+    };
+    const state = (body.state ?? '').toUpperCase();
+    if (state === 'COMPLETED') {
+      return { status: 'COMPLETED', gatewayRefundId: body.refundId };
+    }
+    if (state === 'FAILED') {
+      return {
+        status: 'FAILED',
+        gatewayRefundId: body.refundId,
+        failureReason: body.message ?? 'gateway reported refund failure',
+      };
+    }
+    // PhonePe returns PENDING (or no `state` at all, sometimes) — webhook will
+    // promote to COMPLETED later.
+    return { status: 'INITIATED', gatewayRefundId: body.refundId };
+  }
+
   async healthCheck(): Promise<HealthStatus> {
     try {
       const start = Date.now();
@@ -193,11 +262,23 @@ export class PhonePeProvider implements PaymentProvider {
       parsed = { raw: req.rawBody.slice(0, 500) };
     }
     const event = (parsed['event'] as string | undefined) ?? 'UNKNOWN';
-    const payload = parsed['payload'] as { merchantOrderId?: string } | undefined;
+    // For payment events PhonePe carries `merchantOrderId`; for refund events
+    // the same field name refers to the REFUND order id and the original
+    // order is at `originalMerchantOrderId`. The worker needs to find the
+    // original PT to debit the wallet — so we prefer originalMerchantOrderId
+    // when present.
+    const payload = parsed['payload'] as
+      | {
+          merchantOrderId?: string;
+          originalMerchantOrderId?: string;
+          merchantRefundId?: string;
+        }
+      | undefined;
+    const gatewayTxnId = payload?.originalMerchantOrderId ?? payload?.merchantOrderId;
     return {
       signatureValid: valid,
       eventType: event,
-      gatewayTxnId: payload?.merchantOrderId,
+      gatewayTxnId,
       parsed,
     };
   }

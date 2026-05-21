@@ -33,6 +33,13 @@ export interface CreditInput {
 export interface DebitInput extends Omit<CreditInput, 'topupRequestId'> {
   /** Allow debit beyond `balance` up to `creditLimit - creditUsed`. Default false. */
   allowCreditUtilization?: boolean;
+  /** Bypass the insufficient-funds check entirely and let `balance` go negative.
+   *  ONLY used for gateway-pushed refund reversals where the refund happened
+   *  externally and we MUST record it truthfully — even if the topup was
+   *  already spent. The booking gate's separate INSUFFICIENT_BALANCE check
+   *  is what stops further drawdown; balance < 0 is a recorded debt state,
+   *  not an operational green light. Default false. */
+  allowNegative?: boolean;
 }
 
 export class WalletService {
@@ -249,6 +256,7 @@ export class WalletService {
     metadata?: Record<string, unknown>;
     idempotencyKey?: string;
     allowCreditUtilization?: boolean;
+    allowNegative?: boolean;
   }): Promise<WalletTransactionDoc> {
     const session = await startSessionSafe();
     const useTxn = !!session;
@@ -275,7 +283,7 @@ export class WalletService {
         nextBalance = currentBalance + input.amount;
       } else {
         const available = currentBalance - blocked;
-        if (input.amount > available) {
+        if (input.amount > available && !input.allowNegative) {
           if (!input.allowCreditUtilization || input.amount - available > creditLimit - creditUsed) {
             throw new AppError('INSUFFICIENT_WALLET', {
               required: input.amount,
