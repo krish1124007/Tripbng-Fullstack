@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import {
@@ -7,6 +8,8 @@ import {
   ChevronDown,
   ChevronRight,
   CreditCard,
+  Eye,
+  EyeOff,
   Home,
   LayoutDashboard,
   LogOut,
@@ -119,12 +122,53 @@ function Breadcrumbs() {
   );
 }
 
+/** Mask used everywhere when the user has hidden their balance.
+ *  Six middots — long enough to read as "masked", short enough to
+ *  preserve the pill's width. */
+const MASK = '••••••';
+
+const HIDE_BALANCE_STORAGE_KEY = 'tripbng:hide-balance';
+
+/**
+ * Persist + restore the "hide balance" preference. localStorage so the
+ * agent's choice survives a hard reload; SSR-safe because we read it
+ * inside `useEffect`. Mirrors the sidebar-collapsed pattern.
+ */
+function useHideBalance(): { hidden: boolean; toggle: () => void } {
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(HIDE_BALANCE_STORAGE_KEY);
+    if (stored === '1') setHidden(true);
+  }, []);
+
+  const toggle = useCallback(() => {
+    setHidden((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(HIDE_BALANCE_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // Storage may be unavailable in private-mode Safari. Pref still
+        // works for the current session; we just can't persist it.
+      }
+      return next;
+    });
+  }, []);
+
+  return { hidden, toggle };
+}
+
 /**
  * WalletPill (topbar variant) — always-visible balance for agency /
  * distributor. Tints amber when balance falls below 20% of credit
- * limit. Clicking opens a popover with the full balance breakdown
- * (My Wallet, Available Credit, Credit Limit, Outstanding Due) and
- * a few derived insights (Total spend power, Utilisation bar).
+ * limit. Clicking the amount opens a popover with the full balance
+ * breakdown (My Wallet, Available Credit, Credit Limit, Outstanding
+ * Due) and a few derived insights (Total spend power, Utilisation bar).
+ *
+ * The eye icon next to the amount toggles a "hide balance" mask. When
+ * hidden, the pill + every value inside the popover render as
+ * `••••••` so a shoulder-surfer can't read the numbers by clicking
+ * through.
  */
 function WalletPillTopbar() {
   const user = useAuthStore((s) => s.user);
@@ -132,6 +176,7 @@ function WalletPillTopbar() {
     staleTime: 30_000,
     enabled: user?.role === 'AGENCY' || user?.role === 'SUB_AGENT' || user?.role === 'DISTRIBUTOR',
   });
+  const { hidden, toggle: toggleHidden } = useHideBalance();
 
   if (user?.role !== 'AGENCY' && user?.role !== 'SUB_AGENT' && user?.role !== 'DISTRIBUTOR') {
     return null;
@@ -150,33 +195,84 @@ function WalletPillTopbar() {
   // Low-cash flag — surfaces a warning chip on the pill.
   const isLow = limit > 0 && balance < limit * 0.2;
 
+  /** Format paise unless the user has hidden their balance — in which
+   *  case render the mask instead. The loading branch always wins so we
+   *  don't flash `••••••` for a moment before real data lands. */
+  const fmt = (paise: number): string => {
+    if (wallet.isLoading) return '—';
+    if (hidden) return MASK;
+    return formatPaiseAsINR(paise, { compact: true });
+  };
+
   return (
     <Popover>
-      <PopoverTrigger asChild>
+      {/*
+        The pill is visually one piece, but functionally TWO independent
+        interactive regions. Putting an eye-button *inside* the
+        PopoverTrigger button would create nested <button>s (invalid
+        HTML, accessibility warnings, and the inner click would still
+        bubble up to toggle the popover). Instead, the pill is a styled
+        wrapper div; the popover trigger holds the amount + chevron,
+        and the eye-toggle sits next to it as a sibling.
+      */}
+      <div
+        className={cn(
+          // Wrapper styled like the old pill: rounded-full border + flex.
+          // The hover ring + open-state tint live on the inner trigger
+          // button so they react to the popover state via data-[state].
+          'hidden h-9 items-center rounded-full border bg-surface-1 pl-3 pr-1 text-xs font-semibold transition-colors duration-fast sm:flex',
+          isLow && 'border-warning/40 bg-warning-soft text-warning',
+        )}
+      >
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label="Balance info"
+            className={cn(
+              'group/trigger flex h-7 items-center gap-2 rounded-full pr-1.5 transition-colors hover:text-brand-700',
+              'data-[state=open]:text-brand-700 dark:data-[state=open]:text-brand-300',
+              isLow && 'hover:text-warning data-[state=open]:text-warning',
+            )}
+          >
+            <WalletIcon className="h-3.5 w-3.5" strokeWidth={2} />
+            <span className="font-mono tabular-nums" aria-live="polite">
+              {fmt(balance)}
+            </span>
+            {isLow ? (
+              <span className="rounded-full bg-warning/20 px-1.5 text-[9px] font-bold uppercase tracking-wider text-warning">
+                Low
+              </span>
+            ) : null}
+            <ChevronDown
+              className="h-3 w-3 opacity-60 transition-transform duration-fast group-data-[state=open]/trigger:rotate-180"
+              strokeWidth={2}
+            />
+          </button>
+        </PopoverTrigger>
+
+        {/* Visual divider between the popover trigger and the eye toggle. */}
+        <span aria-hidden className="mx-1 h-4 w-px bg-strong/60" />
+
+        {/*
+          Hide / reveal toggle. Sibling of the PopoverTrigger so a click
+          here doesn't propagate up to open the popover. Persisted via
+          localStorage in `useHideBalance` above.
+        */}
         <button
           type="button"
-          aria-label="Balance info"
-          className={cn(
-            'group hidden h-9 items-center gap-2 rounded-full border bg-surface-1 px-3 text-xs font-semibold transition-all duration-fast hover:border-brand-300 hover:text-brand-700 sm:flex',
-            'data-[state=open]:border-brand-400 data-[state=open]:bg-brand-50 data-[state=open]:text-brand-700 dark:data-[state=open]:bg-brand-500/10',
-            isLow && 'border-warning/40 bg-warning-soft text-warning',
-          )}
+          onClick={toggleHidden}
+          aria-label={hidden ? 'Show wallet balance' : 'Hide wallet balance'}
+          aria-pressed={hidden}
+          title={hidden ? 'Show balance' : 'Hide balance'}
+          className="grid h-7 w-7 place-items-center rounded-full text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-1"
         >
-          <WalletIcon className="h-3.5 w-3.5" strokeWidth={2} />
-          <span className="font-mono tabular-nums">
-            {wallet.isLoading ? '—' : formatPaiseAsINR(balance, { compact: true })}
-          </span>
-          {isLow ? (
-            <span className="rounded-full bg-warning/20 px-1.5 text-[9px] font-bold uppercase tracking-wider text-warning">
-              Low
-            </span>
-          ) : null}
-          <ChevronDown
-            className="h-3 w-3 opacity-60 transition-transform duration-fast group-data-[state=open]:rotate-180"
-            strokeWidth={2}
-          />
+          {hidden ? (
+            <EyeOff className="h-3.5 w-3.5" strokeWidth={2} />
+          ) : (
+            <Eye className="h-3.5 w-3.5" strokeWidth={2} />
+          )}
         </button>
-      </PopoverTrigger>
+      </div>
       <PopoverContent className="w-80 p-0">
         {/* Header band — brand surface with eyebrow + spend power. */}
         <div className="relative overflow-hidden rounded-t-lg border-b bg-gradient-to-br from-brand-50 to-surface-1 p-4 dark:from-brand-500/10 dark:to-surface-2/40">
@@ -191,7 +287,7 @@ function WalletPillTopbar() {
                 Total spend power
               </p>
               <p className="mt-1 font-mono text-2xl font-bold tabular-nums leading-none text-ink-1">
-                {wallet.isLoading ? '—' : formatPaiseAsINR(spendPower, { compact: true })}
+                {fmt(spendPower)}
               </p>
               {sum ? (
                 <p className="mt-1.5 truncate font-mono text-[10px] text-ink-3">
@@ -208,7 +304,7 @@ function WalletPillTopbar() {
             icon={<WalletIcon className="h-3.5 w-3.5" strokeWidth={2} />}
             tone="brand"
             label="My Wallet"
-            value={formatPaiseAsINR(balance, { compact: true })}
+            value={fmt(balance)}
             hint="Cash balance"
             loading={wallet.isLoading}
           />
@@ -216,7 +312,7 @@ function WalletPillTopbar() {
             icon={<CreditCard className="h-3.5 w-3.5" strokeWidth={2} />}
             tone="success"
             label="Available Credit"
-            value={formatPaiseAsINR(availableCredit, { compact: true })}
+            value={fmt(availableCredit)}
             hint="Headroom you can still draw"
             loading={wallet.isLoading}
           />
@@ -224,7 +320,7 @@ function WalletPillTopbar() {
             icon={<ShieldCheck className="h-3.5 w-3.5" strokeWidth={2} />}
             tone="neutral"
             label="Credit Limit"
-            value={formatPaiseAsINR(limit, { compact: true })}
+            value={fmt(limit)}
             hint="Approved by accounts"
             loading={wallet.isLoading}
           />
@@ -233,13 +329,18 @@ function WalletPillTopbar() {
             tone={outstanding > 0 ? 'danger' : 'neutral'}
             label="Outstanding (Due)"
             value={
-              outstanding > 0
-                ? `- ${formatPaiseAsINR(outstanding, { compact: true })}`
-                : formatPaiseAsINR(0, { compact: true })
+              // The outstanding row needs a "- " prefix only when there's
+              // a real outstanding > 0; when hidden, the mask is the same
+              // either way — no leading minus.
+              hidden || wallet.isLoading
+                ? fmt(outstanding)
+                : outstanding > 0
+                  ? `- ${formatPaiseAsINR(outstanding, { compact: true })}`
+                  : formatPaiseAsINR(0, { compact: true })
             }
             hint={outstanding > 0 ? 'Current invoice exposure' : 'No dues — fully settled'}
             loading={wallet.isLoading}
-            valueDanger={outstanding > 0}
+            valueDanger={outstanding > 0 && !hidden}
           />
 
           {/* Utilisation bar — only when a credit line is configured. */}
