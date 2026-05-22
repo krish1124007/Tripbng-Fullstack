@@ -89,7 +89,7 @@ export function TopupDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-[calc(100vw-1rem)] sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Top up wallet</DialogTitle>
           <DialogDescription>

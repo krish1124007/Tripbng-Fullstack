@@ -129,13 +129,17 @@ export function MobileBottomNav() {
         {primary.map((item) => (
           <NavTile key={item.href} item={item} pathname={pathname} />
         ))}
+        {/* "More" tile — mirrors NavTile's visual rhythm so the row feels
+            unified instead of "4 nav tiles + 1 awkward button". */}
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium text-ink-3 transition-colors hover:text-ink-1"
+          className="tap-transparent group flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 py-1.5 text-[10px] font-medium text-ink-3 transition-colors hover:text-ink-1"
           aria-label="More navigation"
         >
-          <MoreHorizontal className="h-5 w-5" strokeWidth={1.75} />
+          <span className="grid h-7 w-12 place-items-center rounded-full transition-colors">
+            <MoreHorizontal className="h-5 w-5" strokeWidth={1.75} />
+          </span>
           <span>More</span>
         </button>
       </nav>
@@ -197,15 +201,43 @@ function NavTile({ item, pathname }: { item: NavItem; pathname: string }) {
       href={item.href}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'group flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium transition-colors',
+        // min-h-[44px] enforces the WCAG touch-target minimum. The polish on
+        // top — pill background + top indicator bar — is purely visual; the
+        // underlying tap target stays edge-to-edge for forgiving thumb hits.
+        'tap-transparent group relative flex min-h-[44px] flex-1 flex-col items-center justify-center gap-1 py-1.5 text-[10px] font-medium transition-colors',
         active ? 'text-brand-700 dark:text-brand-300' : 'text-ink-3 hover:text-ink-1',
       )}
     >
-      <item.icon
-        className={cn('h-5 w-5 transition-colors', active && 'text-brand-600 dark:text-brand-400')}
-        strokeWidth={1.75}
+      {/* Top indicator strip — Material 3 / iOS spring-bar pattern. Scales in
+          from 0 on activation so the change between tabs animates instead of
+          popping. */}
+      <span
+        aria-hidden
+        className={cn(
+          'absolute inset-x-0 top-0 mx-auto h-0.5 w-8 origin-center rounded-b-full bg-brand-500 transition-transform duration-fast ease-snappy',
+          active ? 'scale-x-100' : 'scale-x-0',
+        )}
       />
-      <span>{item.label}</span>
+      {/* Icon pill — soft brand wash on active, transparent otherwise. The
+          horizontal proportions (h-7 w-12) match the Material 3 nav-rail
+          spec, with the icon centred and a touch of breathing room. */}
+      <span
+        className={cn(
+          'grid h-7 w-12 place-items-center rounded-full transition-colors duration-fast',
+          active && 'bg-brand-50 dark:bg-brand-500/15',
+        )}
+      >
+        <item.icon
+          className={cn(
+            'h-5 w-5 transition-colors',
+            active && 'text-brand-600 dark:text-brand-400',
+          )}
+          // Slightly thicker stroke on active gives the icon a "filled"
+          // weight without needing two icon variants.
+          strokeWidth={active ? 2 : 1.75}
+        />
+      </span>
+      <span className={cn(active && 'font-semibold')}>{item.label}</span>
     </Link>
   );
   return item.permission ? <Can permission={item.permission}>{inner}</Can> : inner;

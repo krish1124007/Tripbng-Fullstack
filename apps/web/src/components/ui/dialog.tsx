@@ -91,18 +91,27 @@ export const DrawerContent = React.forwardRef<
 ));
 DrawerContent.displayName = 'DrawerContent';
 
+// Padding rhythm: `p-4 sm:p-6` so phones get tighter chrome (24px of dialog
+// padding on a 375px viewport leaves only 327px of inner width, which cramps
+// most form layouts — `p-4` gives back 16px per side).
 export const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col gap-1.5 p-6 pb-0', className)} {...props} />
+  <div className={cn('flex flex-col gap-1.5 p-4 pb-0 sm:p-6 sm:pb-0', className)} {...props} />
 );
 DialogHeader.displayName = 'DialogHeader';
 
 export const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex items-center justify-end gap-2 border-t p-6', className)} {...props} />
+  <div
+    className={cn(
+      'flex flex-col-reverse items-stretch gap-2 border-t p-4 sm:flex-row sm:items-center sm:justify-end sm:gap-2 sm:p-6',
+      className,
+    )}
+    {...props}
+  />
 );
 DialogFooter.displayName = 'DialogFooter';
 
 export const DialogBody = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex-1 overflow-y-auto p-6', className)} {...props} />
+  <div className={cn('flex-1 overflow-y-auto p-4 sm:p-6', className)} {...props} />
 );
 DialogBody.displayName = 'DialogBody';
 

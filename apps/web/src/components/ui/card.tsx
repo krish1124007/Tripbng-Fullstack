@@ -45,9 +45,13 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
 );
 Card.displayName = 'Card';
 
+// Padding rhythm: `p-4 sm:p-6` so cards on phones feel proportional. 24px of
+// internal padding on a full-width card at 375px viewport leaves only 327px
+// of content — too cramped for KPI grids and stat cards. The breakpoint
+// nudges the spacing without affecting tablet+ where p-6 reads as elegant.
 export const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn('flex flex-col gap-1.5 p-6', className)} {...props} />
+    <div ref={ref} className={cn('flex flex-col gap-1.5 p-4 sm:p-6', className)} {...props} />
   ),
 );
 CardHeader.displayName = 'CardHeader';
@@ -74,7 +78,7 @@ CardDescription.displayName = 'CardDescription';
 
 export const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn('p-6 pt-0', className)} {...props} />
+    <div ref={ref} className={cn('p-4 pt-0 sm:p-6 sm:pt-0', className)} {...props} />
   ),
 );
 CardContent.displayName = 'CardContent';
@@ -84,7 +88,7 @@ export const CardFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<
     <div
       ref={ref}
       className={cn(
-        'flex items-center justify-between gap-3 border-t bg-surface-0/50 p-4 px-6',
+        'flex items-center justify-between gap-3 border-t bg-surface-0/50 p-3 sm:p-4 sm:px-6',
         className,
       )}
       {...props}

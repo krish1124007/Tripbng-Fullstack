@@ -15,6 +15,18 @@ export const tailwindPreset = {
         '2xl': '1440px',
       },
     },
+    // Breakpoint roster — added `xs` at 480px to bridge the gap between
+    // phone (375px iPhone 13 mini, 393px Pixel) and the default `sm:640`.
+    // This is where "phone-but-roomy" UX lives — adds a layer for grid
+    // bumps and chip flow tightening without firing the full sm: cascade.
+    screens: {
+      xs: '480px',
+      sm: '640px',
+      md: '768px',
+      lg: '1024px',
+      xl: '1280px',
+      '2xl': '1440px',
+    },
     extend: {
       colors: {
         surface: {
@@ -152,6 +164,11 @@ export const tailwindPreset = {
         md: 'var(--shadow-md)',
         lg: 'var(--shadow-lg)',
         xl: 'var(--shadow-xl)',
+        // 2xl — heroes / floating CTAs that need to feel like they're hovering
+        // over the page, not sitting on it. Slightly tinted so the lift reads
+        // as brand-aware instead of neutral grey.
+        '2xl':
+          '0 25px 50px -12px rgb(15 23 42 / 0.18), 0 12px 24px -10px rgb(30 64 175 / 0.10)',
         card: 'var(--shadow-sm)',
         elevated: 'var(--shadow-lg)',
         brand: 'var(--shadow-brand)',
@@ -161,11 +178,22 @@ export const tailwindPreset = {
       transitionTimingFunction: {
         'out-expo': 'var(--ease-out-expo)',
         spring: 'var(--ease-spring)',
+        // Snappy ease — the curve every modern UI defaults to (Material 3,
+        // iOS spring). Use for state transitions where things should feel
+        // present and responsive without bouncing.
+        snappy: 'cubic-bezier(0.32, 0.72, 0, 1)',
+        // Bounce — only for delightful moments (toast in, badge pulse). Do
+        // NOT use for input feedback; it feels broken on rapid interactions.
+        bounce: 'cubic-bezier(0.68, -0.55, 0.27, 1.55)',
       },
       transitionDuration: {
         fast: '150ms',
         normal: '250ms',
         slow: '400ms',
+        // Pulled-down extras for micro-interactions (button press, ripple).
+        // Anything below 120ms feels instant; above 400ms feels sluggish.
+        instant: '80ms',
+        slower: '600ms',
       },
       keyframes: {
         'fade-in-up': {
@@ -210,7 +238,68 @@ export const tailwindPreset = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Tiny in-line plugin — exposes utilities that we kept inlining as
+    // arbitrary values (`[scrollbar-width:none]` etc.). Centralising them
+    // here cleans up call sites and lets us version the behaviour.
+    ({ addUtilities }) => {
+      addUtilities({
+        // iOS notch / home-bar / dynamic-island handling. Use these on any
+        // element pinned to the edge of the viewport (sheets, bottom nav,
+        // sticky toolbars, top-bars on PWAs).
+        '.pt-safe': { 'padding-top': 'env(safe-area-inset-top)' },
+        '.pb-safe': { 'padding-bottom': 'env(safe-area-inset-bottom)' },
+        '.pl-safe': { 'padding-left': 'env(safe-area-inset-left)' },
+        '.pr-safe': { 'padding-right': 'env(safe-area-inset-right)' },
+        '.px-safe': {
+          'padding-left': 'env(safe-area-inset-left)',
+          'padding-right': 'env(safe-area-inset-right)',
+        },
+        '.py-safe': {
+          'padding-top': 'env(safe-area-inset-top)',
+          'padding-bottom': 'env(safe-area-inset-bottom)',
+        },
+        // "Use my padding OR the safe-area, whichever is larger." Avoids
+        // the double-margin bug when a designer sets `pb-4` but iOS adds
+        // 34px on top of that for the home indicator.
+        '.pb-safe-or-2': {
+          'padding-bottom': 'max(0.5rem, env(safe-area-inset-bottom))',
+        },
+        '.pb-safe-or-3': {
+          'padding-bottom': 'max(0.75rem, env(safe-area-inset-bottom))',
+        },
+        '.pb-safe-or-4': {
+          'padding-bottom': 'max(1rem, env(safe-area-inset-bottom))',
+        },
+
+        // Hide the scrollbar but keep the element scrollable. Used in
+        // chip rows, tab strips, fare strips — anywhere a native bar would
+        // chew vertical space on a small screen.
+        '.scrollbar-hide': {
+          'scrollbar-width': 'none',
+          '-ms-overflow-style': 'none',
+          '&::-webkit-scrollbar': {
+            display: 'none',
+          },
+        },
+
+        // Kill the blue tap highlight Mobile Safari adds to every tap on
+        // interactive elements. Our own :active styles + active:scale[0.98]
+        // already do the job and the system flash fights against them.
+        '.tap-transparent': {
+          '-webkit-tap-highlight-color': 'transparent',
+        },
+
+        // Hardware-accelerated rendering hint. Apply to elements that
+        // will be animated (sticky elements during scroll, sliding sheets)
+        // to avoid layout jank on lower-end Android.
+        '.will-animate': {
+          'will-change': 'transform, opacity',
+          'transform': 'translateZ(0)',
+        },
+      });
+    },
+  ],
 };
 
 export default tailwindPreset;

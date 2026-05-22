@@ -663,8 +663,8 @@ export default function TopupsPage() {
 
       {/* ─────────── Bulk-approve toolbar ─────────── */}
       {isAdmin && bulkSelected.size > 0 ? (
-        <div className="flex items-center justify-between rounded-lg border border-brand-500/40 bg-brand-50/60 px-4 py-2.5 dark:bg-brand-500/10">
-          <div className="flex items-center gap-2 text-sm">
+        <div className="flex flex-col gap-2 rounded-lg border border-brand-500/40 bg-brand-50/60 px-4 py-2.5 dark:bg-brand-500/10 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             <Check className="h-4 w-4 text-brand-700 dark:text-brand-300" />
             <span className="font-semibold text-ink-1">
               {bulkSelected.size} top-up{bulkSelected.size === 1 ? '' : 's'} selected
@@ -679,7 +679,7 @@ export default function TopupsPage() {
               )}
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:shrink-0">
             <Button variant="ghost" size="sm" onClick={() => setBulkSelected(new Set())}>
               Clear
             </Button>
@@ -881,7 +881,7 @@ function KpiCard({
             {icon}
           </span>
         </div>
-        <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-ink-1">
+        <p className="mt-2 font-mono text-xl font-bold tabular-nums text-ink-1 sm:text-2xl">
           {loading ? <Skeleton className="h-7 w-16" /> : value}
         </p>
         {subValue ? <p className="mt-0.5 font-mono text-[10px] text-ink-4">{subValue}</p> : null}

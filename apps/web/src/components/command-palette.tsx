@@ -86,11 +86,18 @@ export function CommandPalette() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="Search or jump to (Cmd+K)"
-        className="group flex h-9 items-center gap-2 rounded-md border bg-surface-1 px-3 text-sm text-ink-3 transition-[color,border-color,background-color] duration-fast hover:border-ink-5 hover:text-ink-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:w-72"
+        // Width strategy:
+        //   - below lg (1024px): icon-only square button (h-9 w-9) so it fits
+        //     next to the wallet pill + notifications without squeezing the
+        //     "Search or jump to…" label into vertical wrapping.
+        //   - lg+: expand to the original 288px button with label + ⌘K hint
+        // shrink-0 prevents flex siblings from forcing us narrower than the
+        // icon footprint when the topbar gets tight.
+        className="group flex h-9 w-9 shrink-0 items-center justify-center gap-2 rounded-md border bg-surface-1 text-sm text-ink-3 transition-[color,border-color,background-color] duration-fast hover:border-ink-5 hover:text-ink-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:w-72 lg:justify-start lg:px-3"
       >
         <Search className="h-4 w-4 transition-colors group-hover:text-brand-600" strokeWidth={1.75} />
-        <span className="flex-1 text-left">Search or jump to…</span>
-        <kbd className="kbd hidden sm:inline">⌘K</kbd>
+        <span className="hidden flex-1 text-left lg:inline">Search or jump to…</span>
+        <kbd className="kbd hidden lg:inline">⌘K</kbd>
       </button>
 
       {open ? (

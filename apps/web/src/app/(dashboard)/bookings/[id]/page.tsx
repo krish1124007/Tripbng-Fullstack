@@ -210,7 +210,7 @@ export default function BookingDetailPage({ params }: { params: { id: string } }
           ₹0 in fare-rule fees instead of the usual penalty. */}
       <VoidWindowBanner voidWindowEndsAt={b.voidWindowEndsAt ?? null} />
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-2 md:grid-cols-3 md:gap-4">
         <Card>
           <CardContent className="space-y-1 p-4">
             <p className="text-xs uppercase tracking-wider text-ink-3">Status</p>

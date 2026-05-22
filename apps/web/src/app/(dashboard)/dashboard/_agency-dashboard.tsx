@@ -129,7 +129,7 @@ export function AgencyDashboard() {
                 <CreditCard className="h-4 w-4" strokeWidth={1.75} />
               </span>
             </div>
-            <p className="text-[28px] font-bold leading-none tabular-nums text-ink-1">
+            <p className="text-xl font-bold leading-none tabular-nums text-ink-1 sm:text-[28px]">
               {wallet.isLoading ? '—' : formatPaiseAsINR(wallet.data?.outstandingPaise ?? 0)}
             </p>
             {utilisationPct != null ? (

@@ -43,10 +43,12 @@ export function DataTable<TData>({
   });
 
   const rowHeight = density === 'compact' ? 'h-10' : 'h-13';
+  const rows = table.getRowModel().rows;
 
   return (
     <div className={cn('overflow-hidden rounded-lg border bg-surface-1', className)}>
-      <div className="overflow-x-auto">
+      {/* ───── Desktop table (md and up) ───── */}
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-surface-2 text-xs uppercase tracking-wider text-ink-3">
             {table.getHeaderGroups().map((hg) => (
@@ -94,14 +96,14 @@ export function DataTable<TData>({
                   ))}
                 </tr>
               ))
-            ) : table.getRowModel().rows.length === 0 ? (
+            ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="px-4 py-12 text-center text-ink-3">
                   {empty ?? 'No results.'}
                 </td>
               </tr>
             ) : (
-              table.getRowModel().rows.map((row) => (
+              rows.map((row) => (
                 <tr
                   key={row.id}
                   className={cn(
@@ -121,6 +123,67 @@ export function DataTable<TData>({
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* ───── Mobile card view (< md) — each row becomes a stacked label/value card */}
+      {/* Horizontal scroll on tiny phones is one of the worst UX patterns — this */}
+      {/* gives every list page a clean readable layout at 375px without ANY page */}
+      {/* having to opt in. */}
+      <div className="divide-y md:hidden">
+        {loading ? (
+          Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="space-y-2 p-3">
+              {columns.slice(0, 3).map((_c, j) => (
+                <div key={j} className="flex items-center justify-between gap-3">
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-3 w-24" />
+                </div>
+              ))}
+            </div>
+          ))
+        ) : rows.length === 0 ? (
+          <div className="px-4 py-12 text-center text-sm text-ink-3">
+            {empty ?? 'No results.'}
+          </div>
+        ) : (
+          rows.map((row) => (
+            <div
+              key={row.id}
+              className={cn(
+                'space-y-1.5 p-3 transition-colors',
+                onRowClick && 'cursor-pointer active:bg-surface-2',
+              )}
+              onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+            >
+              {row.getVisibleCells().map((cell) => {
+                // Cells whose column has no header (e.g. an actions column with
+                // header='') render full-width without a label. Everything else
+                // gets a `LABEL  value` two-column row.
+                const headerDef = cell.column.columnDef.header;
+                const label =
+                  typeof headerDef === 'string' && headerDef.trim().length > 0
+                    ? headerDef
+                    : null;
+                const rendered = flexRender(cell.column.columnDef.cell, cell.getContext());
+                if (!label) {
+                  return (
+                    <div key={cell.id} className="pt-1">
+                      {rendered}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={cell.id} className="flex items-start justify-between gap-3">
+                    <span className="shrink-0 pt-0.5 text-[10px] font-medium uppercase tracking-wider text-ink-3">
+                      {label}
+                    </span>
+                    <span className="min-w-0 text-right text-sm text-ink-1">{rendered}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

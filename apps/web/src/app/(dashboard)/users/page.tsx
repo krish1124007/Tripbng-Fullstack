@@ -214,7 +214,7 @@ export default function UsersPage() {
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
         <Input
           placeholder="Search by name, email, or code"
           value={q}
@@ -222,7 +222,7 @@ export default function UsersPage() {
             setQ(e.target.value);
             setPage(1);
           }}
-          className="max-w-sm"
+          className="w-full sm:max-w-sm"
         />
       </div>
 

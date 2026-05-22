@@ -177,9 +177,9 @@ export default function AmendmentsPage() {
         }
       />
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-[180px]">
+          <SelectTrigger className="w-full sm:w-[180px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -190,7 +190,7 @@ export default function AmendmentsPage() {
           </SelectContent>
         </Select>
         <Select value={type} onValueChange={setType}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

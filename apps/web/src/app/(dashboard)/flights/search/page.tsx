@@ -697,6 +697,10 @@ function FlightsSearchInner() {
               <div
                 onClick={(e) => e.stopPropagation()}
                 className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-2xl bg-surface-1 p-3 shadow-2xl animate-slide-down"
+                // iOS notched devices: the home indicator + bottom safe area
+                // eats ~34px; respect it so the close button + last filter
+                // aren't hidden behind the bar.
+                style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
               >
                 <div className="mb-2 flex items-center justify-between gap-2 px-2">
                   <h2 className="text-base font-bold text-ink-1">Filters</h2>

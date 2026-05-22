@@ -329,7 +329,7 @@ function SetupTwoFactorPageInner() {
                     <img
                       src={enrolment.qrDataUrl}
                       alt="2FA enrolment QR code"
-                      className="h-48 w-48"
+                      className="h-40 w-40 sm:h-48 sm:w-48"
                       width={192}
                       height={192}
                     />

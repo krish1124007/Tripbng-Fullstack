@@ -212,7 +212,7 @@ function ReturnInner() {
 
           {/* Amount + provider */}
           {status ? (
-            <div className="mb-6 grid grid-cols-2 gap-4 rounded-lg border bg-surface-2/30 p-4">
+            <div className="mb-6 grid grid-cols-1 gap-3 rounded-lg border bg-surface-2/30 p-4 sm:grid-cols-2 sm:gap-4">
               <Field label="Amount" value={formatPaiseAsINR(status.amount)} mono />
               <Field label="Provider" value={providerLabel(status.providerCode)} />
               {status.paymentInstrument ? (

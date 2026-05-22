@@ -220,7 +220,9 @@ function WalletPillTopbar() {
           // Wrapper styled like the old pill: rounded-full border + flex.
           // The hover ring + open-state tint live on the inner trigger
           // button so they react to the popover state via data-[state].
-          'hidden h-9 items-center rounded-full border bg-surface-1 pl-3 pr-1 text-xs font-semibold transition-colors duration-fast sm:flex',
+          // Now visible on mobile too — the calculator + cart get hidden
+          // (see topbar layout) so the pill fits in the right rail at 375px.
+          'flex h-9 items-center rounded-full border bg-surface-1 pl-3 pr-1 text-xs font-semibold transition-colors duration-fast',
           isLow && 'border-warning/40 bg-warning-soft text-warning',
         )}
       >
@@ -488,14 +490,23 @@ export function TopBar() {
         </Button>
       ) : null}
 
-      <WalletPillTopbar />
-      <CommandPalette />
-      <MarkupCalculatorButton />
-      <CartButton />
-      <NotificationsBell />
+      {/* Right-rail controls — group with shrink-0 so a wide center
+          breadcrumb on narrow tablets can't push the bell / avatar off-screen.
+          Internal gap-2 (instead of the header's gap-3) keeps the icons
+          packed tight when space is at a premium. */}
+      <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+        <WalletPillTopbar />
+        <CommandPalette />
+        {/* Calculator + cart are secondary — hide on phones so the balance,
+            notifications, and user-menu have room at 375px. */}
+        <div className="hidden sm:flex sm:items-center sm:gap-3">
+          <MarkupCalculatorButton />
+          <CartButton />
+        </div>
+        <NotificationsBell />
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
@@ -509,7 +520,12 @@ export function TopBar() {
             </Avatar>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuContent
+          align="end"
+          // Cap to viewport - 1rem so the menu never bleeds off the edge on
+          // small phones. The 16rem (w-64) cap kicks in once there's room.
+          className="w-[min(16rem,calc(100vw-1rem))]"
+        >
           <DropdownMenuLabel>
             <div className="flex items-center gap-3">
               <Avatar className="h-10 w-10">
@@ -541,11 +557,12 @@ export function TopBar() {
             <ShieldCheck className="h-4 w-4" /> Security
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem destructive onClick={onLogout}>
-            <LogOut className="h-4 w-4" /> Sign out
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <DropdownMenuItem destructive onClick={onLogout}>
+              <LogOut className="h-4 w-4" /> Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </header>
   );
 }

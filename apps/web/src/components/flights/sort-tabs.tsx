@@ -46,11 +46,11 @@ export function SortTabs({ sort, onChange }: SortTabsProps) {
   }
 
   return (
-    <div className="flex items-center gap-1 rounded-lg border border-stroke-1 bg-surface-1 p-1 shadow-sm">
-      <span className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-3">
+    <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-stroke-1 bg-surface-1 p-1 shadow-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <span className="hidden shrink-0 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-3 sm:inline">
         Sort By
       </span>
-      <div className="h-5 w-px bg-stroke-1" />
+      <div className="hidden h-5 w-px shrink-0 bg-stroke-1 sm:block" />
       {TABS.map((t) => {
         const isActive = t.key === activeTab;
         return (

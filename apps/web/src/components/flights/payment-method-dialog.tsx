@@ -178,7 +178,7 @@ export function PaymentMethodDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && !busy && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100vw-1rem)] sm:max-w-2xl">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <span className="grid h-9 w-9 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
