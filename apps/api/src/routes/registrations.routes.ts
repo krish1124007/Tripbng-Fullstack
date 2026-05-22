@@ -232,6 +232,17 @@ registrationsRouter.post(
         throw new AppError('VALIDATION_ERROR', { reason: `${channel} not set on registration` });
       }
       const result = await sendOtp({ registrationId: id, channel, to });
+      if (!result.delivered) {
+        // SMTP / provider couldn't reach the user — surface as 502 so
+        // the UI shows "couldn't send the code, try again" instead of
+        // letting the user sit waiting for a code that never arrives.
+        throw new AppError('SUPPLIER_UNAVAILABLE', {
+          reason:
+            result.error === 'email-send-failed'
+              ? "Couldn't email the verification code right now. Please try again."
+              : "Couldn't send the verification code right now. Please try again.",
+        });
+      }
       return ok(res, result);
     } catch (err) {
       next(err);

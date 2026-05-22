@@ -44,6 +44,8 @@ export type AlertEvent =
   // Ops-only
   | 'CIRCUIT_BREAKER_TRIPPED'
   | 'MANUAL_ISSUANCE_PENDING_REMINDER'
+  | 'PARTNER_INQUIRY_RECEIVED'
+  | 'RECON_DISCREPANCY_FOUND'
   // ── Agency-wallet additions (Phases 1-8 of AGENCY_WALLET_SYSTEM spec) ──
   // Credit-due reminder anchors (spec §8)
   | 'CREDIT_DUE_T_MINUS_3'
@@ -158,6 +160,50 @@ export interface BreakerVars {
   supplier: string;
   errorRate: number;
   windowSec: number;
+}
+
+/** Reconciliation discrepancy — fired by the recon service when a gateway
+ *  settlement batch shows mismatches against our PaymentTransaction records.
+ *  Goes to OPS_ALERT_EMAIL only (finance shares the inbox until/unless a
+ *  separate FINANCE_ALERT_EMAIL env var is introduced). */
+export interface ReconDiscrepancyFoundVars {
+  batchId: string;
+  providerCode: string;
+  /** ISO yyyy-mm-dd — the settlement date the batch covers. */
+  batchDate: string;
+  discrepancyCount: number;
+  matchedCount: number;
+  resolvedCount: number;
+  /** Top 5 most-actionable discrepancies — rendered as a table. */
+  sampleDiscrepancies: Array<{
+    kind: string;
+    gatewayTxnId?: string | null;
+    paymentTxnCode?: string | null;
+    detail: string;
+    ourAmount?: number | null;
+    gatewayAmount?: number | null;
+  }>;
+  /** Deep-link to the admin reconciliation drill-down. */
+  adminUrl: string;
+}
+
+/** Partner inquiry — fired when a prospective agency or distributor submits
+ *  the public `/api/v1/inquiries` form. Goes to OPS_ALERT_EMAIL only. */
+export interface PartnerInquiryReceivedVars {
+  inquiryId: string;
+  type: 'AGENCY' | 'DISTRIBUTOR';
+  companyName: string;
+  fullName: string;
+  email: string;
+  mobile: string;
+  city: string;
+  state: string;
+  gstin: string;
+  sizeBand: string;
+  message: string;
+  /** Deep-link to /admin/inquiries/:id on the agency-portal — built at
+   *  enqueue time from req.protocol + req.get('host'). */
+  adminUrl: string;
 }
 
 // ── Ops vars ──
@@ -337,6 +383,8 @@ export type AlertPayload =
     }
   | { event: 'CIRCUIT_BREAKER_TRIPPED'; vars: BreakerVars }
   | { event: 'MANUAL_ISSUANCE_PENDING_REMINDER'; vars: ManualIssuancePendingVars }
+  | { event: 'PARTNER_INQUIRY_RECEIVED'; vars: PartnerInquiryReceivedVars }
+  | { event: 'RECON_DISCREPANCY_FOUND'; vars: ReconDiscrepancyFoundVars }
   // Agency-wallet events
   | { event: 'CREDIT_DUE_T_MINUS_3'; vars: CreditDueVars }
   | { event: 'CREDIT_DUE_T_MINUS_1'; vars: CreditDueVars }
@@ -347,12 +395,25 @@ export type AlertPayload =
   | { event: 'MODULE_SWITCHED'; vars: ModuleSwitchedVars }
   | { event: 'ADJUSTMENT_POSTED'; vars: AdjustmentPostedVars };
 
+/** An email attachment passed through to nodemailer verbatim. Content is
+ *  a Buffer (not a Stream) so it's safely re-serializable inside the
+ *  BullMQ job if the dispatcher ever needs to retry. */
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
+
 /** Render output per channel — what the dispatcher hands to the channel
  *  adapter to deliver. Templates produce these from AlertPayload. */
 export interface RenderedEmail {
   subject: string;
   html: string;
   text: string;
+  /** Optional file attachments. Produced either inline by `email()` (rare —
+   *  fast/cheap renders only) or by the async `emailAttachments` hook below,
+   *  which the dispatcher calls and merges in before sending. */
+  attachments?: EmailAttachment[];
 }
 
 export interface RenderedWhatsApp {
@@ -384,6 +445,13 @@ export interface AlertTemplate {
     vars: AlertPayload,
     branding?: import('@tripbng/shared').ResolvedBranding | null,
   ) => RenderedEmail;
+  /** Async attachment producer — runs after `email()` and merges the result
+   *  into RenderedEmail.attachments. Use for templates that need to fetch
+   *  the source record (e.g. Booking → e-ticket PDF) which would be
+   *  inappropriate to do in the sync `email()` renderer. Failure is
+   *  non-fatal: the dispatcher sends the email without attachments and
+   *  logs a warn so ops sees the degradation. */
+  emailAttachments?: (vars: AlertPayload) => Promise<EmailAttachment[]>;
   whatsapp?: (vars: AlertPayload) => RenderedWhatsApp;
   inapp?: (vars: AlertPayload) => RenderedInApp;
 }

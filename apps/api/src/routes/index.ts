@@ -42,6 +42,7 @@ import { adminRegistrationsRouter } from './admin-registrations.routes.js';
 import { savedPassengerRouter } from './saved-passenger.routes.js';
 import { internalRouter } from './internal.routes.js';
 import { adminAgencyRouter } from './admin-agency.routes.js';
+import { adminHealthRouter } from './admin-health.routes.js';
 
 export const apiRouter: RouterT = Router();
 
@@ -66,6 +67,11 @@ apiRouter.use('/internal', internalRouter);
 // /admin/* — Phase-5 admin endpoints for the wallet/credit/DI/transfer
 // surfaces from Phases 1-4. Requires SUPER_ADMIN role (enforced per-route).
 apiRouter.use('/admin', adminAgencyRouter);
+
+// /health/* — admin-only deep-health endpoints (SMTP probe + test-send).
+// Distinct from the public healthRouter (liveness / readiness) — these
+// expose sensitive operational detail and trigger side effects.
+apiRouter.use('/health', adminHealthRouter);
 apiRouter.use('/search', searchRouter);
 apiRouter.use('/airports', airportRouter);
 

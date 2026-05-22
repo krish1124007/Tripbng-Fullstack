@@ -50,6 +50,8 @@ const DEFAULT_CHANNELS: Record<AlertEvent, AlertChannel[]> = {
   // Ops
   CIRCUIT_BREAKER_TRIPPED: ['email'], // ops inbox only
   MANUAL_ISSUANCE_PENDING_REMINDER: ['email'], // ops inbox only
+  PARTNER_INQUIRY_RECEIVED: ['email'], // ops inbox only
+  RECON_DISCREPANCY_FOUND: ['email'], // ops/finance inbox only
 
   // Agency-wallet
   // Credit-due reminders escalate by anchor: heads-up is in-app + email only;

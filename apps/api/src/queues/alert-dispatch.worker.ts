@@ -220,7 +220,27 @@ async function runChannel(
         // Pass branding as the second arg — templates that ignore it
         // (e.g. internal ops alerts) render with platform defaults.
         const rendered = template.email(payload, ctx.branding);
-        const r = await sendEmail(recipient, rendered, { correlationKey: ctx.correlationKey });
+        // Async attachment hook (e-ticket PDF, hotel invoice PDF, etc.) —
+        // merges into rendered.attachments before SMTP send. Failure here
+        // is non-fatal: we send the email without the attachment and log
+        // a warn so ops sees the degradation.
+        if (template.emailAttachments) {
+          try {
+            const extra = await template.emailAttachments(payload);
+            if (extra.length > 0) {
+              rendered.attachments = [...(rendered.attachments ?? []), ...extra];
+            }
+          } catch (err) {
+            logger.warn(
+              { err, event: payload.event, correlationKey: ctx.correlationKey },
+              'alert dispatch: emailAttachments hook failed — sending without attachment',
+            );
+          }
+        }
+        const r = await sendEmail(recipient, rendered, {
+          correlationKey: ctx.correlationKey,
+          event: ctx.event,
+        });
         return { channel, recipient: recipient.email ?? '—', ...r };
       }
       if (channel === 'whatsapp') {

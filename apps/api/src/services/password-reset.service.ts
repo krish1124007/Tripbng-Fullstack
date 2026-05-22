@@ -8,6 +8,7 @@
 import { AppError } from '@tripbng/shared';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
+import { captureException } from '../config/sentry.js';
 import { getSmtpTransport } from '../config/smtp.js';
 import {
   PASSWORD_RESET_TTL_MIN,
@@ -152,8 +153,9 @@ async function sendResetEmail(args: SendResetEmailArgs): Promise<void> {
   const text = buildPlainText(args, resetUrl);
   const html = buildHtmlBody(args, resetUrl);
 
+  const start = Date.now();
   try {
-    await transport.sendMail({
+    const info = await transport.sendMail({
       from: env.SMTP_FROM,
       to: args.to,
       replyTo: env.SMTP_REPLY_TO,
@@ -161,13 +163,31 @@ async function sendResetEmail(args: SendResetEmailArgs): Promise<void> {
       text,
       html,
     });
-    logger.info({ to: args.to }, 'forgot-password: reset email sent');
+    logger.info(
+      {
+        to: args.to,
+        messageId: info.messageId ?? null,
+        durationMs: Date.now() - start,
+      },
+      'forgot-password: reset email sent',
+    );
   } catch (err) {
-    // We log + swallow — exposing send failures lets a probe distinguish
-    // valid emails from invalid ones (since SMTP servers often reject
-    // unknown recipients). The user still sees a generic "we sent a
-    // link" message.
-    logger.error({ err, to: args.to }, 'forgot-password: SMTP send failed');
+    // We log + swallow w.r.t. the API response — exposing send failures
+    // lets a probe distinguish valid emails from invalid ones (since SMTP
+    // servers often reject unknown recipients). The user still sees a
+    // generic "we sent a link" message.
+    //
+    // BUT we must NOT silently lose track of the failure — an outage here
+    // means real users are locked out of password reset. Capture to Sentry
+    // and log loudly so ops gets paged via the existing alert pipeline.
+    logger.error(
+      { err, to: args.to, durationMs: Date.now() - start },
+      'forgot-password: SMTP send failed',
+    );
+    captureException(err, {
+      tags: { service: 'password-reset', channel: 'smtp' },
+      extra: { recipient: args.to },
+    });
   }
 }
 

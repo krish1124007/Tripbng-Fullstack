@@ -21,6 +21,8 @@ import { manualTopupRejectedTemplate } from './manual-topup-rejected.js';
 import { lowWalletBalanceTemplate } from './low-wallet-balance.js';
 import { circuitBreakerTrippedTemplate } from './circuit-breaker-tripped.js';
 import { manualIssuancePendingReminderTemplate } from './manual-issuance-pending-reminder.js';
+import { partnerInquiryReceivedTemplate } from './partner-inquiry-received.js';
+import { reconDiscrepancyFoundTemplate } from './recon-discrepancy-found.js';
 import { loginNewDeviceTemplate } from './login-new-device.js';
 import { hotelBookingAwaitsApprovalTemplate } from './hotel-booking-awaits-approval.js';
 import { hotelBookingApprovedTemplate } from './hotel-booking-approved.js';
@@ -67,6 +69,8 @@ export const TEMPLATES: Partial<Record<AlertEvent, AlertTemplate>> = {
   // Ops
   CIRCUIT_BREAKER_TRIPPED: circuitBreakerTrippedTemplate,
   MANUAL_ISSUANCE_PENDING_REMINDER: manualIssuancePendingReminderTemplate,
+  PARTNER_INQUIRY_RECEIVED: partnerInquiryReceivedTemplate,
+  RECON_DISCREPANCY_FOUND: reconDiscrepancyFoundTemplate,
 
   // Agency-wallet — credit-due reminders, DI incentive, distributor transfer,
   // module switch, manual adjustments. All four credit-due anchors share the
