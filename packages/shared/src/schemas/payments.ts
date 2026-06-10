@@ -39,7 +39,7 @@ export const TOPUP_METHOD = [
   'MANUAL_NEFT',
   'MANUAL_UPI',
   'MANUAL_CASH',
-] as const;
+]  as const;
 export type TopupMethod = (typeof TOPUP_METHOD)[number];
 
 // ────────── Request shapes ──────────
