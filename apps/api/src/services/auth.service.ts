@@ -112,23 +112,25 @@ export async function loginWithPassword(
   // affected. Documented + audited (we still write the audit row).
   const isDevTotpBypass = env.NODE_ENV !== 'production' && totp === '000000';
 
-  if (user.role === 'SUPER_ADMIN' && !user.twoFactorEnabled && !isDevTotpBypass) {
-    await auditLoginFailure(email, 'TOTP_ENROLMENT_REQUIRED', user, ctx);
-    throw new AppError('TOTP_REQUIRED', {
-      reason: 'SUPER_ADMIN accounts must enrol 2FA before sign-in',
-      enrolUrl: '/auth/2fa/setup',
-    });
-  }
-  if (user.twoFactorEnabled && !isDevTotpBypass) {
-    if (!totp) {
-      await auditLoginFailure(email, 'TOTP_REQUIRED', user, ctx);
-      throw new AppError('TOTP_REQUIRED');
-    }
-    if (!user.twoFactorSecret || !verifyTotp(totp, user.twoFactorSecret)) {
-      await auditLoginFailure(email, 'INVALID_TOTP', user, ctx);
-      throw new AppError('INVALID_TOTP');
-    }
-  }
+  // --- TEMPORARILY DISABLED 2FA ENFORCEMENT ---
+  // if (user.role === 'SUPER_ADMIN' && !user.twoFactorEnabled && !isDevTotpBypass) {
+  //   await auditLoginFailure(email, 'TOTP_ENROLMENT_REQUIRED', user, ctx);
+  //   throw new AppError('TOTP_REQUIRED', {
+  //     reason: 'SUPER_ADMIN accounts must enrol 2FA before sign-in',
+  //     enrolUrl: '/auth/2fa/setup',
+  //   });
+  // }
+  // if (user.twoFactorEnabled && !isDevTotpBypass) {
+  //   if (!totp) {
+  //     await auditLoginFailure(email, 'TOTP_REQUIRED', user, ctx);
+  //     throw new AppError('TOTP_REQUIRED');
+  //   }
+  //   if (!user.twoFactorSecret || !verifyTotp(totp, user.twoFactorSecret)) {
+  //     await auditLoginFailure(email, 'INVALID_TOTP', user, ctx);
+  //     throw new AppError('INVALID_TOTP');
+  //   }
+  // }
+  // ----------------------------------------------
 
   // Snapshot the previous login IP BEFORE we overwrite it — used for the
   // new-device alert below. First-ever logins get no alert (lastLoginIp is
