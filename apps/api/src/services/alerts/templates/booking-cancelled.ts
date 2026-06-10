@@ -4,10 +4,10 @@
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const bookingCancelledTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'BOOKING_CANCELLED') {
       throw new Error(`bookingCancelledTemplate.email called with ${payload.event}`);
     }
@@ -17,6 +17,7 @@ export const bookingCancelledTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Cancellation processed. Refund ${rs(netRefund)} credited to your wallet.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Booking cancelled</h1>
 <p style="margin:0 0 16px;color:#475569;">The cancellation has been processed and the refund has been credited to your wallet.</p>

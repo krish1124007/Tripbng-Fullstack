@@ -7,10 +7,10 @@
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const hotelBookingApprovedTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'HOTEL_BOOKING_APPROVED') {
       throw new Error(`hotelBookingApprovedTemplate.email called with ${payload.event}`);
     }
@@ -19,6 +19,7 @@ export const hotelBookingApprovedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your booking for ${v.hotelName} was approved by ${v.decidedBy ?? 'your manager'}.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Booking approved</h1>
 <p style="margin:0 0 16px;color:#475569;">${v.decidedBy ?? 'Your manager'} approved your booking. We're confirming it with the supplier now — you'll get a separate confirmation once the e-voucher is issued.</p>

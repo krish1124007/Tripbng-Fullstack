@@ -8,13 +8,14 @@ import {
   RejectTopupRequestSchema,
   StatementQuerySchema,
   TransferRequestSchema,
-  VerifyRazorpayTopupRequestSchema,
   WalletQuerySchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { requireNotFrozen } from '../middleware/cutover-freeze.js';
+import { topupAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { Agency } from '../models/Agency.js';
 import { Distributor } from '../models/Distributor.js';
 import { TopupRequest } from '../models/TopupRequest.js';
@@ -26,7 +27,6 @@ import {
   initiateTopup,
   rejectTopup,
   serializeTopup,
-  verifyRazorpayTopup,
   type ActorContext,
 } from '../services/wallet/topup.js';
 import { distributorTransferToAgency } from '../services/wallet/transfer.js';
@@ -169,9 +169,12 @@ walletRouter.get('/transactions', validate(WalletQuerySchema, 'query'), async (r
   }
 });
 
-// POST /wallet/topup — initiate (RAZORPAY returns order; manual returns PENDING)
+// POST /wallet/topup — initiate a manual (BANK/UPI/CASH) top-up.
+// Gateway top-ups (PhonePe / ICICI Orange PG) go through POST /api/v1/payments/topups/initiate.
 walletRouter.post(
   '/topup',
+  requireNotFrozen('topup'),
+  topupAgencyLimit,
   requirePermission('wallet:topup:request'),
   validate(InitiateTopupRequestSchema),
   async (req, res, next) => {
@@ -188,26 +191,6 @@ walletRouter.post(
         after: { mode: input.paymentMode, amountPaise: input.amountPaise },
       });
       return ok(res, response, undefined, 201);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-walletRouter.post(
-  '/topup/verify-razorpay',
-  validate(VerifyRazorpayTopupRequestSchema),
-  async (req, res, next) => {
-    try {
-      const input = req.body as ReturnType<typeof VerifyRazorpayTopupRequestSchema.parse>;
-      const t = await verifyRazorpayTopup(
-        actorFromReq(req),
-        input.topupId,
-        input.razorpayPaymentId,
-        input.razorpayOrderId,
-        input.razorpaySignature,
-      );
-      return ok(res, await serializeTopup(t));
     } catch (err) {
       next(err);
     }
@@ -242,6 +225,7 @@ walletRouter.get('/topups', async (req, res, next) => {
 
 walletRouter.post(
   '/topups/:id/approve',
+  requireNotFrozen('topup'),
   requirePermission('wallet:topup:approve'),
   validate(ApproveTopupRequestSchema),
   async (req, res, next) => {
@@ -275,6 +259,7 @@ walletRouter.post(
 // POST /wallet/transfer — distributor → agency (or super admin doing the same).
 walletRouter.post(
   '/transfer',
+  requireNotFrozen('transfer'),
   requirePermission('wallet:transfer:to-agency'),
   validate(TransferRequestSchema),
   async (req, res, next) => {
@@ -295,6 +280,7 @@ walletRouter.post(
 
 walletRouter.post(
   '/adjust',
+  requireNotFrozen('topup'),
   requirePermission('wallet:adjust'),
   validate(AdjustWalletRequestSchema),
   async (req, res, next) => {

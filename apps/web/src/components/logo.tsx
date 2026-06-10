@@ -7,11 +7,19 @@
  * `<Logo variant="mark" />` — square brand glyph for tight spaces / favicons.
  * `<Logo variant="image" />` — back-compat alias for `full`.
  *
+ * Tenant branding: when the BrandingThemeProvider has a resolved
+ * `logoPublicUrl`, we swap the platform wordmark for the tenant's
+ * uploaded logo. Falls back to the bundled SVG when no tenant logo
+ * is configured. Use `forceDefault` on auth / marketing pages where
+ * we always want the platform mark regardless of any tenant cookie.
+ *
  * On dark surfaces (login hero, brand-aurora panels), pass `onDark` so we wrap
  * the logo in a soft white pill — the partner wordmark is a raster, so its
  * colours don't adapt to surface contrast like a pure-text wordmark would.
  */
+'use client';
 import Image from 'next/image';
+import { useBranding } from '@/components/branding/branding-theme-provider';
 import { cn } from '@/lib/utils';
 
 type Variant = 'full' | 'mark' | 'image';
@@ -24,6 +32,9 @@ interface LogoProps {
   /** When true, wraps the logo in a soft light pill so it stays legible on
    *  dark surfaces (login hero, brand-aurora panels). */
   onDark?: boolean;
+  /** When true, ignore any tenant-uploaded logo and always show the
+   *  platform wordmark (login / marketing surfaces). */
+  forceDefault?: boolean;
 }
 
 export function Logo({
@@ -31,7 +42,20 @@ export function Logo({
   className,
   accentClass = 'fill-accent-500',
   onDark = false,
+  forceDefault = false,
 }: LogoProps) {
+  // Pull tenant branding if a BrandingThemeProvider is in scope. The
+  // hook returns null when unmounted (e.g. server-rendering the
+  // marketing app router) — falling through to the platform logo is
+  // the safe default.
+  const { branding } = useBranding();
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+  const tenantLogoUrl =
+    !forceDefault && branding?.isActive && branding.logoPublicUrl
+      ? branding.logoPublicUrl.startsWith('http')
+        ? branding.logoPublicUrl
+        : `${apiBase}${branding.logoPublicUrl}`
+      : null;
   // Square brand glyph — kept as inline SVG so it can adopt the brand palette
   // and scale crisply at any size. Used by sidebars, favicons, OG marks.
   if (variant === 'mark') {
@@ -55,6 +79,28 @@ export function Logo({
   // `full` and `image` both render the partner wordmark from /public/partner-logo.svg.
   // The SVG embeds a raster, so we serve it via Next/Image with the native intrinsic
   // size (425×48) and let CSS govern the rendered height through the parent span.
+  // When a tenant logo is configured, we swap in their uploaded image instead.
+  if (tenantLogoUrl) {
+    return (
+      <span
+        className={cn(
+          'inline-flex select-none items-center',
+          onDark && 'rounded-md bg-white/95 px-2 py-1 shadow-sm dark:bg-white',
+          className,
+        )}
+        aria-label={branding?.companyName ?? 'Partner logo'}
+        role="img"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={tenantLogoUrl}
+          alt={branding?.companyName ?? 'Partner logo'}
+          className="h-full w-auto max-w-[180px] object-contain"
+        />
+      </span>
+    );
+  }
+
   return (
     <span
       className={cn(

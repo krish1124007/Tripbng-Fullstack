@@ -6,8 +6,17 @@ import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
   // Base — single source of truth for transition, sizing rhythm, focus, disabled.
-  // Note: focus-visible uses a single brand-tinted ring (no offset double-ring).
-  'group relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-semibold tracking-tight transition-[background,color,box-shadow,transform] duration-fast ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50',
+  //
+  // Behaviour tuning:
+  //   - `cursor-pointer` is explicit (Tailwind defaults to `default` on
+  //      <button>) — small thing, but it makes hover feel right
+  //   - `tap-transparent` kills Mobile Safari's blue tap flash so our own
+  //      `active:scale-[0.98]` is the only feedback signal
+  //   - `transition-[…transform…] duration-fast ease-snappy` lets the press
+  //      animation feel modern (Material 3 / iOS spring curve)
+  //   - `focus-visible:ring-2` (no offset) keeps the ring inline so it
+  //      doesn't bleed past tight container edges
+  'group relative inline-flex cursor-pointer tap-transparent select-none items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-semibold tracking-tight transition-[background,color,box-shadow,transform] duration-fast ease-snappy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50',
   {
     variants: {
       variant: {

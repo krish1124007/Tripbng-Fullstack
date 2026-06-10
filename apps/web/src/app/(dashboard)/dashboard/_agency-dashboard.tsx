@@ -8,7 +8,6 @@ import {
   ClipboardList,
   CreditCard,
   FileText,
-  Hotel,
   Plane,
   PlaneTakeoff,
   Receipt,
@@ -19,7 +18,8 @@ import {
   Users,
   Wallet as WalletIcon,
 } from 'lucide-react';
-import type { PublicBooking, WalletSummary } from '@tripbng/shared';
+import type { PublicBooking, PublicUpdate, WalletSummary } from '@tripbng/shared';
+import { UPDATE_ICON_MAP, relativeTime } from '@/lib/update-icons';
 import { BannerViewer } from '@/components/banner-viewer';
 import {
   Badge,
@@ -129,7 +129,7 @@ export function AgencyDashboard() {
                 <CreditCard className="h-4 w-4" strokeWidth={1.75} />
               </span>
             </div>
-            <p className="text-[28px] font-bold leading-none tabular-nums text-ink-1">
+            <p className="text-xl font-bold leading-none tabular-nums text-ink-1 sm:text-[28px]">
               {wallet.isLoading ? '—' : formatPaiseAsINR(wallet.data?.outstandingPaise ?? 0)}
             </p>
             {utilisationPct != null ? (
@@ -195,14 +195,14 @@ export function AgencyDashboard() {
             href="/flights"
             icon={PlaneTakeoff}
             title="Search & book flights"
-            desc="Series, LCC, FSC — one ranked list, one Cheapest/Fastest/Best ribbon."
+            desc="Compare fares across airlines and suppliers, all on a single screen."
             primary
           />
           <QuickAction
             href="/topups"
             icon={ArrowDownToLine}
             title="Add money"
-            desc="Razorpay UPI, NEFT, or credit. Instant credit on success."
+            desc="Bank transfer or NEFT — upload your payment proof, we'll credit in minutes."
           />
           <QuickAction
             href="/amendments"
@@ -290,47 +290,99 @@ export function AgencyDashboard() {
 // ────────── Sub-components ──────────
 
 function PromoBanner() {
+  // Curated Unsplash hero — Vietnam, Halong Bay limestone karsts at golden
+  // hour. Hotlinkable per Unsplash's licence; ?w + ?q params keep the
+  // payload tight (~120 KB) so the banner doesn't blow the dashboard
+  // first-paint budget.
+  const HERO_IMAGE =
+    'https://images.unsplash.com/photo-1528127269322-539801943592?auto=format&fit=crop&w=1600&q=80';
+
   return (
     <Link
       href="/holidays"
-      className="group relative col-span-1 flex h-full overflow-hidden rounded-xl border bg-gradient-to-br from-rose-100 via-orange-50 to-amber-100 transition-all duration-fast hover:-translate-y-px hover:shadow-md lg:col-span-2"
+      className="group relative col-span-1 flex h-full min-h-[280px] overflow-hidden rounded-xl border border-ink-1/10 shadow-sm transition-all duration-fast hover:-translate-y-0.5 hover:shadow-lg lg:col-span-2"
     >
-      {/* Decorative blob */}
+      {/* Hero image — `<img>` with object-cover so it scales to the
+          banner's responsive height. Decorative, marked aria-hidden. */}
+      <img
+        aria-hidden
+        src={HERO_IMAGE}
+        alt=""
+        className="absolute inset-0 h-full w-full object-cover transition-transform duration-slow group-hover:scale-105"
+        loading="lazy"
+      />
+
+      {/* Editorial overlay — deep brand-deep wash on the left fading to
+          a soft veil on the right so the hero stays visible. */}
       <div
         aria-hidden
-        className="absolute -right-10 -top-10 h-48 w-48 rounded-full bg-accent-200/60 blur-3xl"
+        className="absolute inset-0 bg-gradient-to-r from-[#0B1220]/95 via-[#0B1220]/75 to-[#0B1220]/20"
       />
-      <div className="relative flex flex-1 items-center gap-5 p-6 lg:p-8">
-        <div className="flex-1">
-          <Badge variant="accent" dot pulse className="mb-3">
+      {/* Subtle top-right accent kiss for warmth. */}
+      <div
+        aria-hidden
+        className="absolute -right-16 -top-16 h-64 w-64 rounded-full bg-accent-500/30 blur-3xl"
+      />
+      {/* Faint accent hairline at the bottom edge — print/poster cue. */}
+      <div aria-hidden className="absolute inset-x-0 bottom-0 h-px bg-accent-500/60" />
+
+      {/* Content sits above the overlay. */}
+      <div className="relative z-10 flex flex-1 flex-col justify-between p-6 lg:p-8">
+        {/* Top row: featured badge + Q3 calendar marker on the right. */}
+        <div className="flex items-start justify-between gap-4">
+          <Badge
+            variant="accent"
+            dot
+            pulse
+            className="border-accent-300/40 bg-accent-500/20 text-white backdrop-blur"
+          >
             <Sparkles className="h-3 w-3" /> Featured series
           </Badge>
-          <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-rose-700">
-            Danang · Ho Chi Minh
-          </p>
-          <h3 className="mt-1 text-2xl font-bold tracking-tight text-ink-1 lg:text-3xl">
-            Vietnam · Cultural & scenic escape
-          </h3>
-          <p className="mt-1 text-sm text-ink-2">
-            5 nights · Hotels · Daily breakfast · Sightseeing · Private transfers · English guide
-          </p>
-          <div className="mt-4 flex items-end gap-3">
-            <div>
-              <p className="eyebrow text-ink-3">Starting from</p>
-              <p className="mt-0.5 font-mono text-3xl font-bold tabular-nums text-ink-1">
-                USD 305
-                <span className="ml-1 text-xs font-normal text-ink-3">/pax</span>
-              </p>
-            </div>
-            <div className="flex h-10 items-center gap-2 rounded-md bg-surface-1/80 px-3 text-xs text-ink-2 backdrop-blur">
-              Group of 6+ travelling together
-            </div>
+          <div className="hidden flex-col items-end gap-0.5 md:flex">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-white/80">
+              7 nights available
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/50">
+              Q3 · 2026
+            </span>
           </div>
         </div>
-        <div className="hidden items-center justify-center md:flex">
-          <span className="grid h-14 w-14 place-items-center rounded-full bg-surface-1 text-accent-600 shadow-md transition-all duration-fast group-hover:translate-x-0.5 group-hover:bg-accent-50">
-            <ArrowRight className="h-5 w-5" strokeWidth={2} />
-          </span>
+
+        {/* Headline block, anchored to the bottom of the card. */}
+        <div className="mt-6 space-y-3">
+          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-accent-300">
+            Danang · Ho Chi Minh
+          </p>
+          <h3 className="text-2xl font-bold leading-tight tracking-tight text-white drop-shadow-sm lg:text-4xl">
+            Vietnam · Cultural & scenic escape
+          </h3>
+          <p className="max-w-md text-xs text-white/80 lg:text-sm">
+            5 nights · Hotels · Daily breakfast · Sightseeing · Private transfers · English guide
+          </p>
+
+          {/* Glass cards row — price + group chip + CTA. */}
+          <div className="flex flex-wrap items-end gap-3 pt-3">
+            <div className="rounded-lg border border-white/20 bg-white/10 px-4 py-2.5 backdrop-blur-md">
+              <p className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-white/70">
+                Starting from
+              </p>
+              <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums leading-none text-white">
+                ₹24,999
+                <span className="ml-1 text-[10px] font-normal text-white/70">/pax</span>
+              </p>
+            </div>
+            <div className="flex h-10 items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 text-xs text-white backdrop-blur-md">
+              <Users className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Group of 6+ travelling together
+            </div>
+
+            {/* Solid CTA pill — the only opaque element below the headline,
+                guiding the eye to the click target. */}
+            <span className="ml-auto inline-flex items-center gap-2 rounded-full bg-accent-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-fast group-hover:translate-x-0.5 group-hover:bg-accent-600 group-hover:shadow-xl">
+              View itinerary
+              <ArrowRight className="h-4 w-4" strokeWidth={2.5} />
+            </span>
+          </div>
         </div>
       </div>
     </Link>
@@ -338,40 +390,12 @@ function PromoBanner() {
 }
 
 function UpdatesFeed() {
-  const updates = [
-    {
-      tag: 'New',
-      tone: 'accent' as const,
-      title: 'Series Q3 calendar is live',
-      body: 'July–September departures now bookable. Search Flights → toggle Series.',
-      icon: PlaneTakeoff,
-      time: '2 days ago',
-    },
-    {
-      tag: 'Update',
-      tone: 'brand' as const,
-      title: 'Auto-credit on top-up',
-      body: 'UPI top-ups credit instantly — no manual reconciliation needed.',
-      icon: ArrowDownToLine,
-      time: '1 week ago',
-    },
-    {
-      tag: 'New',
-      tone: 'accent' as const,
-      title: 'Hotel module connected',
-      body: 'Direct contracted hotels for Bangkok, Bali, Dubai, Maldives now searchable.',
-      icon: Hotel,
-      time: '1 week ago',
-    },
-    {
-      tag: 'Notice',
-      tone: 'neutral' as const,
-      title: 'Pax calendar in beta',
-      body: 'Quick view of who is travelling when. Open Pax calendar from Shortcuts.',
-      icon: CalendarDays,
-      time: '2 weeks ago',
-    },
-  ];
+  const list = useApiPaginatedQuery<PublicUpdate>(
+    ['updates', 'dashboard'],
+    '/api/v1/updates',
+    { query: { page: 1, limit: 6 } },
+  );
+  const updates = list.data?.data ?? [];
 
   return (
     <Card className="flex h-full flex-col">
@@ -385,37 +409,71 @@ function UpdatesFeed() {
         </Badge>
       </CardHeader>
       <CardContent className="flex-1">
-        <ul className="space-y-3">
-          {updates.map((u) => (
-            <li
-              key={u.title}
-              className="flex items-start gap-3 rounded-md border bg-surface-1 p-3 transition-colors hover:bg-surface-2"
-            >
-              <span
-                className={cn(
-                  'grid h-7 w-7 shrink-0 place-items-center rounded-md',
-                  u.tone === 'accent'
-                    ? 'bg-accent-50 text-accent-700 dark:bg-accent-500/15 dark:text-accent-400'
-                    : u.tone === 'brand'
-                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300'
-                      : 'bg-surface-2 text-ink-3',
-                )}
-              >
-                <u.icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Badge variant={u.tone} className="text-[9px]">
-                    {u.tag}
-                  </Badge>
-                  <p className="text-sm font-semibold text-ink-1">{u.title}</p>
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-ink-3">{u.body}</p>
-                <p className="mt-1.5 font-mono text-[10px] text-ink-4">{u.time}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
+        {list.isLoading ? (
+          <ul className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <li key={i} className="rounded-md border bg-surface-1 p-3">
+                <Skeleton className="h-3 w-1/3" />
+                <Skeleton className="mt-2 h-3 w-3/4" />
+                <Skeleton className="mt-2 h-3 w-1/2" />
+              </li>
+            ))}
+          </ul>
+        ) : updates.length === 0 ? (
+          <p className="rounded-md border border-dashed bg-surface-1 p-6 text-center text-xs text-ink-3">
+            No updates yet — the trade desk hasn't posted anything.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {updates.map((u) => {
+              const Icon = UPDATE_ICON_MAP[u.icon] ?? Sparkles;
+              const row = (
+                <li
+                  key={u.id}
+                  className="flex items-start gap-3 rounded-md border bg-surface-1 p-3 transition-colors hover:bg-surface-2"
+                >
+                  <span
+                    className={cn(
+                      'grid h-7 w-7 shrink-0 place-items-center rounded-md',
+                      u.tone === 'accent'
+                        ? 'bg-accent-50 text-accent-700 dark:bg-accent-500/15 dark:text-accent-400'
+                        : u.tone === 'brand'
+                          ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300'
+                          : 'bg-surface-2 text-ink-3',
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant={u.tone} className="text-[9px]">
+                        {u.tag}
+                      </Badge>
+                      <p className="text-sm font-semibold text-ink-1">{u.title}</p>
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-ink-3">{u.body}</p>
+                    <p className="mt-1.5 font-mono text-[10px] text-ink-4">
+                      {relativeTime(u.publishedAt)}
+                    </p>
+                  </div>
+                </li>
+              );
+              return u.href ? (
+                <Link
+                  key={u.id}
+                  href={u.href}
+                  target={u.href.startsWith('http') ? '_blank' : undefined}
+                  rel={u.href.startsWith('http') ? 'noopener noreferrer' : undefined}
+                  className="block"
+                >
+                  {row}
+                </Link>
+              ) : (
+                row
+              );
+            })}
+          </ul>
+        )}
       </CardContent>
     </Card>
   );

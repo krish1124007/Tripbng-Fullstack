@@ -70,11 +70,6 @@ export const InitiateTopupRequestSchema = z
     paymentMode: z.enum(PAYMENT_MODE),
     notes: z.string().max(500).optional(),
 
-    // Razorpay returns these on the client after checkout — passed back for verification.
-    razorpayPaymentId: z.string().optional(),
-    razorpayOrderId: z.string().optional(),
-    razorpaySignature: z.string().optional(),
-
     // For manual modes: the bank reference / UPI ref number / receipt number.
     referenceNumber: z.string().max(120).optional(),
     proofUrl: z.string().url().optional(),
@@ -97,14 +92,6 @@ export type InitiateTopupRequest = z.infer<typeof InitiateTopupRequestSchema>;
 
 export const InitiateTopupResponseSchema = z.discriminatedUnion('mode', [
   z.object({
-    mode: z.literal('RAZORPAY'),
-    topupId: z.string(),
-    razorpayOrderId: z.string(),
-    razorpayKeyId: z.string(),
-    amountPaise: z.number().int(),
-    currency: z.string(),
-  }),
-  z.object({
     mode: z.literal('MANUAL'),
     topupId: z.string(),
     status: z.literal('PENDING'),
@@ -117,14 +104,6 @@ export const InitiateTopupResponseSchema = z.discriminatedUnion('mode', [
   }),
 ]);
 export type InitiateTopupResponse = z.infer<typeof InitiateTopupResponseSchema>;
-
-export const VerifyRazorpayTopupRequestSchema = z.object({
-  topupId: z.string().regex(/^[a-fA-F0-9]{24}$/),
-  razorpayPaymentId: z.string().min(1),
-  razorpayOrderId: z.string().min(1),
-  razorpaySignature: z.string().min(1),
-});
-export type VerifyRazorpayTopupRequest = z.infer<typeof VerifyRazorpayTopupRequestSchema>;
 
 export const ApproveTopupRequestSchema = z.object({
   notes: z.string().max(500).optional(),
@@ -152,8 +131,6 @@ export const PublicTopupRequestSchema = z.object({
   rejectionReason: z.string().nullable(),
   referenceNumber: z.string().nullable(),
   proofUrl: z.string().nullable(),
-  razorpayOrderId: z.string().nullable(),
-  razorpayPaymentId: z.string().nullable(),
   notes: z.string().nullable(),
   walletTxnId: z.string().nullable(),
   createdAt: z.string().datetime(),

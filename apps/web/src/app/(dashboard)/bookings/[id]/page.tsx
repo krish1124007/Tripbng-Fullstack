@@ -2,8 +2,22 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+<<<<<<< HEAD
 import { useParams } from 'next/navigation';
 import { ArrowLeft, Clock, Plane, Receipt, ShieldCheck, X } from 'lucide-react';
+=======
+import {
+  ArrowLeft,
+  Bus as BusIcon,
+  Clock,
+  Hotel as HotelIcon,
+  Plane,
+  Receipt,
+  ShieldCheck,
+  StickyNote as VisaIcon,
+  X,
+} from 'lucide-react';
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 import { toast } from 'sonner';
 import type { PublicBooking } from '@tripbng/shared';
 import {
@@ -25,15 +39,24 @@ import {
   StatusBadge,
 } from '@/components/ui';
 import { AirlineLogo } from '@/components/airline-logo';
+import { WebCheckInButton } from '@/components/web-check-in-button';
 import { useApiMutation, useApiQuery, useInvalidateOnSuccess } from '@/lib/api-client';
 import { useAuthStore } from '@/lib/auth-store';
 import { downloadAuthenticatedFile } from '@/lib/download';
 import { formatPaiseAsINR } from '@/lib/money';
 import { ApiCallError } from '@/lib/api';
 
+<<<<<<< HEAD
 export default function BookingDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? '';
+=======
+// Next.js 14: `params` is a plain object, not a Promise. Don't wrap with
+// React.use() — that's a Next 15 idiom and crashes here with
+// "An unsupported type was passed to use(): [object Object]".
+export default function BookingDetailPage({ params }: { params: { id: string } }) {
+  const { id } = params;
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
   const accessToken = useAuthStore((s) => s.accessToken);
   const booking = useApiQuery<PublicBooking>(['booking', id], `/api/v1/bookings/${id}`);
   const invalidate = useInvalidateOnSuccess([['bookings'], ['booking', id]]);
@@ -102,13 +125,51 @@ export default function BookingDetailPage() {
   if (!b) return <p className="text-sm text-ink-3">Booking not found.</p>;
 
   const canCancel = ['HOLD', 'TICKETED', 'CONFIRMED'].includes(b.status);
+  // Server adds productType='HOTEL' or 'HOLIDAY' for non-flight rows.
+  // flowSubType backups the discriminator for older clients.
+  const productType =
+    (b as unknown as { productType?: string }).productType ?? 'FLIGHT';
+  const isHotel = productType === 'HOTEL' || (b.flowSubType as unknown as string) === 'HOTEL';
+  const isHoliday =
+    productType === 'HOLIDAY' || (b.flowSubType as unknown as string) === 'HOLIDAY';
+  const isVisa = productType === 'VISA' || (b.flowSubType as unknown as string) === 'VISA';
+  const isBus = productType === 'BUS' || (b.flowSubType as unknown as string) === 'BUS';
+  const isInsurance =
+    productType === 'INSURANCE' || (b.flowSubType as unknown as string) === 'INSURANCE';
+  const checkOutStr = b.returnDate
+    ? new Date(b.returnDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })
+    : null;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow={b.flowSubType}
+        eyebrow={
+          isInsurance
+            ? 'INSURANCE'
+            : isBus
+              ? 'BUS'
+              : isVisa
+                ? 'VISA'
+                : isHoliday
+                  ? 'HOLIDAY'
+                  : isHotel
+                    ? 'HOTEL'
+                    : b.flowSubType
+        }
         title={b.bookingCode}
-        description={`PNR ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`}
+        description={
+          isInsurance
+            ? `Policy ${b.pnr ?? '—'} · ${b.sector} · Coverage from ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+            : isBus
+              ? `TIN ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+              : isVisa
+                ? `Application ${b.pnr ?? '—'} · ${b.sector.replace(/^VISA · /, '')} · Expected travel ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+                : isHoliday
+                  ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOLIDAY · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+                  : isHotel
+                    ? `Confirmation ${b.pnr ?? '—'} · ${b.sector.replace(/^HOTEL · /, '')} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}${checkOutStr ? ` → ${checkOutStr}` : ''}`
+                    : `PNR ${b.pnr ?? '—'} · ${b.sector} · ${new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}`
+        }
         actions={
           <div className="flex items-center gap-2">
             <Button variant="ghost" asChild>
@@ -116,10 +177,26 @@ export default function BookingDetailPage() {
                 <ArrowLeft className="h-4 w-4" /> All bookings
               </Link>
             </Button>
-            {b.status === 'TICKETED' ? (
-              <Button variant="secondary" onClick={() => downloadPdf('ticket')}>
-                <Plane className="h-4 w-4" /> e-Ticket
-              </Button>
+            {b.status === 'TICKETED' &&
+            !isHotel &&
+            !isHoliday &&
+            !isVisa &&
+            !isBus &&
+            !isInsurance ? (
+              <>
+                <Button variant="secondary" onClick={() => downloadPdf('ticket')}>
+                  <Plane className="h-4 w-4" /> e-Ticket
+                </Button>
+                <WebCheckInButton
+                  booking={{
+                    status: b.status,
+                    airlinePnr: b.airlinePnr,
+                    pnr: b.pnr,
+                    segments: b.segments,
+                    passengers: b.passengers,
+                  }}
+                />
+              </>
             ) : null}
             <Button variant="secondary" onClick={() => downloadPdf('invoice')}>
               <Receipt className="h-4 w-4" /> Invoice
@@ -144,7 +221,7 @@ export default function BookingDetailPage() {
           ₹0 in fare-rule fees instead of the usual penalty. */}
       <VoidWindowBanner voidWindowEndsAt={b.voidWindowEndsAt ?? null} />
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-2 md:grid-cols-3 md:gap-4">
         <Card>
           <CardContent className="space-y-1 p-4">
             <p className="text-xs uppercase tracking-wider text-ink-3">Status</p>
@@ -171,42 +248,257 @@ export default function BookingDetailPage() {
         </Card>
       </div>
 
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-xs uppercase tracking-wider text-ink-3">Itinerary</p>
-          <div className="mt-3 space-y-3">
-            {b.segments.map((s, i) => (
-              <div key={i} className="rounded-md border bg-surface-2 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <AirlineLogo code={s.airline.code} name={s.airline.name} size={28} className="rounded-md" />
-                    <span className="font-mono text-sm">{s.airline.code} {s.flightNumber}</span>
-                    <span className="text-xs text-ink-3">{s.airline.name ?? ''}</span>
-                  </div>
-                  <Badge variant="outline" className="font-mono text-[10px]">{s.duration}m</Badge>
-                </div>
-                <div className="mt-2 grid grid-cols-3 items-center gap-2 text-sm">
+      {isInsurance ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Insurance policy</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <ShieldCheck className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
                   <div>
-                    <p className="font-mono text-lg">{s.origin.code}</p>
+                    <p className="text-base font-semibold text-ink-1">
+                      {b.agencyName || 'Insurance'}
+                    </p>
                     <p className="text-xs text-ink-3">
-                      {new Date(s.departure).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                      Policy{' '}
+                      <span className="font-mono font-semibold text-ink-1">
+                        {b.pnr ?? '—'}
+                      </span>{' '}
+                      · {b.sector}
                     </p>
                   </div>
-                  <div className="text-center text-xs text-ink-3">
-                    {s.stopOver ? `${s.stopOver}m layover` : 'non-stop'}
-                  </div>
-                  <div className="text-right">
-                    <p className="font-mono text-lg">{s.destination.code}</p>
-                    <p className="text-xs text-ink-3">
-                      {new Date(s.arrival).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
-                    </p>
-                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  ASEGO
+                </Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">
+                    Coverage starts
+                  </p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', {
+                      dateStyle: 'medium',
+                    })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">
+                    Coverage ends
+                  </p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {checkOutStr ?? '—'}
+                  </p>
                 </div>
               </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+              <div className="mt-4">
+                <p className="text-[11px] uppercase tracking-wider text-ink-3">
+                  Traveller{b.passengers.length === 1 ? '' : 's'}
+                </p>
+                <p className="text-sm font-medium text-ink-1">
+                  {b.passengers
+                    .map((p) =>
+                      [p.title, p.firstName, p.lastName].filter(Boolean).join(' '),
+                    )
+                    .filter((s) => s.trim().length > 0)
+                    .join(', ') || '—'}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isBus ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Bus journey</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <BusIcon className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-ink-1">{b.sector}</p>
+                    <p className="text-xs text-ink-3">
+                      Operator: {b.agencyName || '—'} · TIN {b.pnr ?? '—'}
+                    </p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  SEATSELLER
+                </Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Travel date</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Seats</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {b.passengers
+                      .map((p) => p.ticketNumber)
+                      .filter(Boolean)
+                      .join(', ') || '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isVisa ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Visa application</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <VisaIcon className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-ink-1">
+                      {b.sector.replace(/^VISA · /, '')}
+                    </p>
+                    <p className="text-xs text-ink-3">Application {b.pnr ?? '—'}</p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">MOCK SUPPLIER</Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Expected travel</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Applicants</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {b.passengers.length}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isHoliday ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Holiday itinerary</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <HotelIcon className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-ink-1">
+                      {b.sector.replace(/^HOLIDAY · /, '')}
+                    </p>
+                    <p className="text-xs text-ink-3">Confirmation {b.pnr ?? '—'}</p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">MOCK SUPPLIER</Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Departure</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Return</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {checkOutStr ?? '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isHotel ? (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Hotel stay</p>
+            <div className="mt-3 rounded-md border bg-surface-2 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-10 w-10 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
+                    <HotelIcon className="h-5 w-5" strokeWidth={1.75} />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-ink-1">
+                      {/* Server sets sector to "HOTEL · {city}" — strip the prefix. */}
+                      {b.sector.replace(/^HOTEL · /, '')}
+                    </p>
+                    <p className="text-xs text-ink-3">Confirmation {b.pnr ?? '—'}</p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">MOCK SUPPLIER</Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Check-in</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {new Date(b.travelDate).toLocaleDateString('en-IN', { dateStyle: 'medium' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wider text-ink-3">Check-out</p>
+                  <p className="font-mono text-base font-semibold text-ink-1">
+                    {checkOutStr ?? '—'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-xs uppercase tracking-wider text-ink-3">Itinerary</p>
+            <div className="mt-3 space-y-3">
+              {b.segments.map((s, i) => (
+                <div key={i} className="rounded-md border bg-surface-2 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <AirlineLogo code={s.airline.code} name={s.airline.name} size={28} className="rounded-md" />
+                      <span className="font-mono text-sm">{s.airline.code} {s.flightNumber}</span>
+                      <span className="text-xs text-ink-3">{s.airline.name ?? ''}</span>
+                    </div>
+                    <Badge variant="outline" className="font-mono text-[10px]">{s.duration}m</Badge>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 items-center gap-2 text-sm">
+                    <div>
+                      <p className="font-mono text-lg">{s.origin.code}</p>
+                      <p className="text-xs text-ink-3">
+                        {new Date(s.departure).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                      </p>
+                    </div>
+                    <div className="text-center text-xs text-ink-3">
+                      {s.stopOver ? `${s.stopOver}m layover` : 'non-stop'}
+                    </div>
+                    <div className="text-right">
+                      <p className="font-mono text-lg">{s.destination.code}</p>
+                      <p className="text-xs text-ink-3">
+                        {new Date(s.arrival).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="p-6">

@@ -26,6 +26,7 @@ import {
   type HolidayFlightEntry,
 } from '@tripbng/shared';
 import { HolidayPackageDocModel, type HolidayPackageDoc } from '../models/HolidayPackageDoc.js';
+import { escapeRegex } from '../utils/regex.js';
 
 // ────────── Slug derivation ──────────
 
@@ -151,7 +152,7 @@ export async function listAdminPackages(
   if (query.publishedOnly) filter.published = true;
   if (query.destinationId) filter.destination = query.destinationId;
   if (query.q) {
-    const re = new RegExp(escapeRegExp(query.q), 'i');
+    const re = new RegExp(escapeRegex(query.q), 'i');
     filter.$or = [{ title: re }, { destination: re }];
   }
   const docs = await HolidayPackageDocModel.find(filter)
@@ -287,6 +288,4 @@ function docToDto(doc: HolidayPackageDoc): AdminHolidayPackage {
   return { id: _id, ...(rest as unknown as Omit<AdminHolidayPackage, 'id'>) };
 }
 
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+// `escapeRegExp` consolidated into utils/regex.ts (escapeRegex).

@@ -17,8 +17,19 @@ import { Policy } from '../models/Policy.js';
 import { priceFare, type PricingMarkupRule } from './pricing/index.js';
 import { Agency } from '../models/Agency.js';
 import { Actor, EVENTS, track } from './analytics.service.js';
+<<<<<<< HEAD
 import { airlineAllowed, resolveSupplierAccess } from './supplier-access/index.js';
 import { SEARCH_REQ_PREFIX } from './search-cache.js';
+=======
+import { applyMapSourceFilter } from './search/map-source-filter.service.js';
+import { deriveTravelType } from '../data/airports.js';
+import {
+  applyMapPolicyToBreakdown,
+  logMapPolicyApplied,
+  resolveMapPolicy,
+  resolveSupplierCommissionPaise,
+} from './pricing/map-policy-pricing.service.js';
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 
 const CACHE_TTL_SECONDS = 60 * 5;
 
@@ -96,6 +107,12 @@ async function priceOption(
   const segment = option.segments[0];
   if (!segment) throw new AppError('VALIDATION_ERROR', { reason: 'option missing segments' });
   const airline = segment.airline.code;
+  // Derive travelType once per option from the route's IATA codes. Earlier
+  // code hardcoded 'DOMESTIC' regardless of the request — international
+  // fares were priced through the domestic GST/markup rails by accident.
+  // `deriveTravelType` falls back to DOMESTIC when an airport isn't in our
+  // OpenFlights file (same fail-safe Phase 4 search filter uses).
+  const optionTravelType = deriveTravelType(segment.origin.code, segment.destination.code);
 
   const priceFor = (
     paxType: 'ADULT' | 'CHILD' | 'INFANT',
@@ -106,7 +123,7 @@ async function priceOption(
       baseFarePaise: perPaxBase,
       taxesPaise: perPaxTax,
       paxType,
-      travelType: request.tripType === 'ROUNDTRIP' ? 'DOMESTIC' : 'DOMESTIC',
+      travelType: optionTravelType,
       travelClass: request.travelClass,
       airline,
       origin: segment.origin.code,
@@ -286,8 +303,35 @@ export async function searchFlights(
   const fanout = await fanoutSearch(allowedAdapters, { searchId, request });
 
   const pricingCtx = await loadPricingContext(ctx);
+
+  // Phase 4 — apply the agent's Map Source filter BEFORE pricing. Pricing is
+  // the expensive step (per-pax FareBreakdown + GST + policy resolution); we
+  // don't want to do it for options that won't reach the agent. Pass-through
+  // when no Map Source matches — see service comment for the policy.
+  const travelType = deriveTravelType(segment.origin, segment.destination);
+  const filtered = await applyMapSourceFilter(fanout.options, {
+    tenantId: ctx.tenantId,
+    agencyGroupIds: pricingCtx.agencyGroupIds,
+    productType: 'FLIGHT',
+    travelType,
+  });
+  if (filtered.applied) {
+    logger.info(
+      {
+        searchId,
+        tenantId: ctx.tenantId,
+        before: fanout.options.length,
+        after: filtered.options.length,
+        dropped: filtered.dropped,
+        masked: filtered.masked,
+      },
+      'map-source filter applied to search results',
+    );
+  }
+
   const bookingDate = new Date();
   const priced: SearchResult[] = [];
+<<<<<<< HEAD
   for (const opt of fanout.options) {
     // Airline restriction (Module 3, rule 3) — a matched mapping/source may
     // limit a supplier to an airline allow-list. Drop options whose carrier
@@ -295,8 +339,23 @@ export async function searchFlights(
     const decision = access.byCode[opt.supplierCode];
     const airline = opt.segments[0]?.airline.code;
     if (decision && airline && !airlineAllowed(decision, airline)) continue;
+=======
+  // Phase 8 — Map Policy adjustment. Cache commission-percent lookups by
+  // policyId so 50 options sharing one Policy don't trigger 50 queries.
+  const commissionPctCache = new Map<string, number>();
+  for (const opt of filtered.options) {
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
     try {
-      priced.push(await priceOption(opt, ctx, pricingCtx, request, bookingDate));
+      const result = await priceOption(opt, ctx, pricingCtx, request, bookingDate);
+      const adjusted = await maybeApplyMapPolicy(
+        result,
+        opt,
+        ctx,
+        request.pax,
+        pricingCtx.agencyGroupIds,
+        commissionPctCache,
+      );
+      priced.push(adjusted);
     } catch (err) {
       logger.warn({ err, supplierFareId: opt.supplierFareId }, 'pricing failed for option');
     }
@@ -360,12 +419,135 @@ function buildCacheKey(ctx: SearchContext, request: SearchRequest): string {
   const seg = request.segments
     .map((s) => `${s.origin}-${s.destination}-${new Date(s.date).toISOString().slice(0, 10)}`)
     .join('|');
+  // Key must vary on every input that can change which fares an agent sees:
+  //   - tenantId (already in the namespace prefix below)
+  //   - distributorId — pricing context loads distributor-scoped MarkupRules,
+  //                     so two agencies in different distributors with the
+  //                     same agency-side rules would otherwise share a key
+  //                     and one would see the other's prices
+  //   - agencyId — agency-scoped MarkupRules + Policy refs
+  //   - tripType — round-trip pairing changes the result set shape
+  //   - segments + class + pax + travelType
+  //
+  // Note `travelType` here is the request-side hint, not the per-option
+  // value derived from IATA — `priceOption` derives DOMESTIC vs INTERNATIONAL
+  // per option from the airport country codes. The request hint is included
+  // for completeness so a future "international-only" filter never collides
+  // with a domestic cached result.
   const hash = crypto
     .createHash('sha1')
-    .update(`${ctx.agencyId}|${seg}|${request.travelClass}|${JSON.stringify(request.pax)}`)
+    .update(
+      [
+        ctx.distributorId ?? 'no-dist',
+        ctx.agencyId ?? 'no-agency',
+        seg,
+        request.tripType,
+        request.travelClass,
+        JSON.stringify(request.pax),
+      ].join('|'),
+    )
     .digest('hex')
     .slice(0, 16);
   return `${SEARCH_REQ_PREFIX}${ctx.tenantId}:${hash}`;
 }
 
 export { adapterForCode };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 8 — Map Policy post-pricing
+//
+// Given a priced SearchResult, find the matching MapPolicy and apply its
+// enabled components to each per-pax FareBreakdown. Recomputes the result's
+// aggregate totals. Pass-through when nothing matches.
+// ─────────────────────────────────────────────────────────────────────────────
+async function maybeApplyMapPolicy(
+  result: SearchResult,
+  opt: FanoutFareOption,
+  ctx: SearchContext,
+  pax: { adults: number; children: number; infants: number },
+  agencyGroupIds: string[],
+  commissionPctCache: Map<string, number>,
+): Promise<SearchResult> {
+  const airline = opt.segments[0]?.airline.code;
+  if (!airline) return result;
+
+  const policy = await resolveMapPolicy({
+    tenantId: ctx.tenantId,
+    productType: 'FLIGHT',
+    airline,
+    // Prefer the adapter-emitted fareType (real marketing label) over the
+    // booking-class proxy. Adapters that don't surface fareType fall back
+    // to fareClass so existing fareType configs that pasted in fare-basis
+    // codes keep working.
+    fareType: opt.fareType ?? opt.fareClass ?? null,
+    agencyGroupIds,
+    supplierCode: opt.supplierCode,
+  });
+  if (!policy) return result;
+
+  // Commission base — same per-pax base × Policy.commissionPercent for every
+  // pax type; resolveSupplierCommissionPaise reads commissionPercent and
+  // computes the per-pax commission paise.
+  const adultCommission = await resolveSupplierCommissionPaise(
+    opt.policyId ?? null,
+    result.perPax.adult.baseFarePaise,
+    commissionPctCache,
+  );
+  const childCommission = await resolveSupplierCommissionPaise(
+    opt.policyId ?? null,
+    result.perPax.child.baseFarePaise,
+    commissionPctCache,
+  );
+  const infantCommission = await resolveSupplierCommissionPaise(
+    opt.policyId ?? null,
+    result.perPax.infant.baseFarePaise,
+    commissionPctCache,
+  );
+
+  const adultAdj = applyMapPolicyToBreakdown(result.perPax.adult, policy, {
+    supplierCommissionPaise: adultCommission,
+  });
+  const childAdj = applyMapPolicyToBreakdown(result.perPax.child, policy, {
+    supplierCommissionPaise: childCommission,
+  });
+  const infantAdj = applyMapPolicyToBreakdown(result.perPax.infant, policy, {
+    supplierCommissionPaise: infantCommission,
+  });
+
+  // No-op short-circuit. Empty trace = no enabled component fired (or every
+  // component computed to zero paise). Skip the rebuild to keep the result
+  // shape identical for the dedup + sort downstream.
+  if (
+    adultAdj.trace.length === 0 &&
+    childAdj.trace.length === 0 &&
+    infantAdj.trace.length === 0
+  ) {
+    return result;
+  }
+
+  logMapPolicyApplied(
+    policy,
+    adultAdj.totalDeltaPaise + childAdj.totalDeltaPaise + infantAdj.totalDeltaPaise,
+    { fareId: result.id, airline, tenantId: ctx.tenantId },
+  );
+
+  const totalGross =
+    adultAdj.breakdown.grossAmountPaise * pax.adults +
+    childAdj.breakdown.grossAmountPaise * pax.children +
+    infantAdj.breakdown.grossAmountPaise * pax.infants;
+  const totalAgencyPayable =
+    adultAdj.breakdown.agencyPayablePaise * pax.adults +
+    childAdj.breakdown.agencyPayablePaise * pax.children +
+    infantAdj.breakdown.agencyPayablePaise * pax.infants;
+
+  return {
+    ...result,
+    perPax: {
+      adult: adultAdj.breakdown,
+      child: childAdj.breakdown,
+      infant: infantAdj.breakdown,
+    },
+    totalGrossPaise: totalGross,
+    totalAgencyPayablePaise: totalAgencyPayable,
+  };
+}

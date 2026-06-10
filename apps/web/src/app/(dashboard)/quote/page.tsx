@@ -275,8 +275,8 @@ export default function QuotePage() {
         {/* Itinerary table */}
         <section className="mt-8">
           <p className="eyebrow mb-3 text-ink-3">Itinerary</p>
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto rounded-md border">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="border-b bg-surface-2 text-xs font-semibold uppercase tracking-wider text-ink-3">
                 <tr>
                   <th className="px-4 py-2.5 text-left">#</th>

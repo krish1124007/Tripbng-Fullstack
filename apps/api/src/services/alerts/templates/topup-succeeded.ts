@@ -2,10 +2,10 @@
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
 import { rs } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const topupSucceededTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'TOPUP_SUCCEEDED') {
       throw new Error(`topupSucceededTemplate.email called with ${payload.event}`);
     }
@@ -14,6 +14,7 @@ export const topupSucceededTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your wallet top-up of ${rs(v.amountPaise)} is successful.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Top-up successful</h1>
 <p style="margin:0 0 16px;color:#475569;">Your wallet has been credited.</p>

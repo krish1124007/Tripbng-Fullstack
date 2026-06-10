@@ -22,6 +22,7 @@ import type { AdminVisaProduct } from '@tripbng/shared';
 import { Badge, Button, Card, CardContent } from '@/components/ui';
 import { quoteVisaProduct } from '@/lib/visa-quote';
 import { useCart } from '@/lib/cart';
+import { BookAndPayDialog } from '@/app/(dashboard)/visa/products/[id]/_book-and-pay-dialog';
 
 interface Selection {
   adults: number;
@@ -32,6 +33,7 @@ interface Selection {
 
 export function BookingRail({ product }: { product: AdminVisaProduct }) {
   const addToCart = useCart((s) => s.addItem);
+  const [bookOpen, setBookOpen] = useState(false);
 
   const [sel, setSel] = useState<Selection>({
     adults: 1,
@@ -174,12 +176,25 @@ export function BookingRail({ product }: { product: AdminVisaProduct }) {
           </p>
         ) : null}
 
-        <Button onClick={onAdd} size="lg" className="w-full">
-          Add to itinerary <ArrowRight className="h-4 w-4" />
+        <Button
+          onClick={() => {
+            if (sel.adults < 1) {
+              toast.error('At least one adult applicant is required.');
+              return;
+            }
+            setBookOpen(true);
+          }}
+          size="lg"
+          className="w-full"
+        >
+          Book &amp; pay ₹{breakdown.totalInr.toLocaleString('en-IN')}{' '}
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+        <Button onClick={onAdd} variant="secondary" size="md" className="w-full">
+          Add to itinerary
         </Button>
         <p className="flex items-center justify-center gap-1 text-[10px] text-ink-3">
-          <CheckCircle2 className="h-3 w-3 text-success" /> Auto-refund on rejection (govt fee
-          minus DR).
+          <CheckCircle2 className="h-3 w-3 text-success" /> Wallet debit on confirm.
         </p>
 
         {product.biometricRequired ? (
@@ -188,6 +203,16 @@ export function BookingRail({ product }: { product: AdminVisaProduct }) {
           </Badge>
         ) : null}
       </CardContent>
+
+      <BookAndPayDialog
+        open={bookOpen}
+        onOpenChange={setBookOpen}
+        product={product}
+        selection={{
+          urgent: sel.urgent && product.urgentAvailable,
+          totalInr: breakdown.totalInr,
+        }}
+      />
     </Card>
   );
 }

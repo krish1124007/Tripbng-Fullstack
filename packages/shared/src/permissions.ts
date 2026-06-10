@@ -46,6 +46,11 @@ export const PERMISSIONS = {
    *  auto-refund (cancel / ticket-failure) path. Limited to platform
    *  admins + accounts users; agencies cannot refund themselves. */
   'booking:refund:manual': ['SUPER_ADMIN', 'ACCOUNTS_USER'],
+  /** Finalize a PENDING_MANUAL booking (Phase 5) — supplier PNR + ref +
+   *  ticket numbers are filled in by ops after they issue manually, then
+   *  this transitions the booking to TICKETED. Wallet was already
+   *  debited at confirm-time so this is a metadata-only write. */
+  'booking:issue-manual': ['SUPER_ADMIN', 'ACCOUNTS_USER', 'SUPPORT_AGENT'],
 
   // Search
   'search:flights': ['AGENCY', 'SUB_AGENT', 'SUPER_ADMIN'],
@@ -198,6 +203,26 @@ export const PERMISSIONS = {
   ],
   'banner:update': ['SUPER_ADMIN'],
   'banner:delete': ['SUPER_ADMIN'],
+
+  // What's-new updates (UpdatesFeed on the agency dashboard).
+  'update:create': ['SUPER_ADMIN'],
+  'update:read': [
+    'SUPER_ADMIN',
+    'DISTRIBUTOR',
+    'AGENCY',
+    'SUB_AGENT',
+    'ACCOUNTS_USER',
+    'SUPPORT_AGENT',
+  ],
+  'update:update': ['SUPER_ADMIN'],
+  'update:delete': ['SUPER_ADMIN'],
+
+  // Per-tenant branding — agency / distributor logo + colour theme.
+  // Owners (AGENCY/DISTRIBUTOR) manage their own; SUPER_ADMIN can
+  // override on behalf of any subject from the admin panel.
+  'branding:read:own': ['AGENCY', 'SUB_AGENT', 'DISTRIBUTOR'],
+  'branding:update:own': ['AGENCY', 'DISTRIBUTOR'],
+  'branding:admin': ['SUPER_ADMIN'],
 
   // Incentives
   'incentive:create': ['SUPER_ADMIN'],

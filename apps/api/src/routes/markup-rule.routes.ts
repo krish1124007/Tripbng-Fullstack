@@ -11,6 +11,7 @@ import {
   UpdateMarkupRuleRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -72,12 +73,19 @@ markupRuleRouter.get(
         typeof MarkupListQuerySchema.parse
       >;
       const filter: Record<string, unknown> = scopeFilter(req.auth!);
+<<<<<<< HEAD
       if (q) filter.name = new RegExp(q, 'i');
       // conditions.airlines / conditions.paxTypes are arrays — equality matches membership.
       if (airline) filter['conditions.airlines'] = airline;
       if (travelType) filter['conditions.travelType'] = travelType;
       if (paxType) filter['conditions.paxTypes'] = paxType;
       if (status) filter.status = status;
+=======
+      {
+        const re = containsRegex(q);
+        if (re) filter.name = re;
+      }
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       const [items, total] = await Promise.all([
         MarkupRule.find(filter)
           .sort({ priority: 1, createdAt: -1 })

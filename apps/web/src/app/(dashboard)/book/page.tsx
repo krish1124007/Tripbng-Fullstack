@@ -60,7 +60,7 @@ import {
 import { SeatSelectionPicker } from '@/components/flights/seat-selection-picker';
 import { SsrCatalogProvider } from '@/components/flights/ssr-catalog-context';
 import { SsrPicker } from '@/components/flights/ssr-picker';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, formatApiError } from '@/lib/api';
 import { useApiMutation, useApiQuery } from '@/lib/api-client';
 import { useAuthStore } from '@/lib/auth-store';
 import {
@@ -514,7 +514,7 @@ function BookFlow() {
     },
     onError: (err) => {
       setPayNowMode(false);
-      toast.error(err.message);
+      toast.error(formatApiError(err));
     },
   });
 
@@ -540,7 +540,7 @@ function BookFlow() {
           setHoldExpired(true); // ensure UI gates lock even if our client timer drifted
           return;
         }
-        toast.error(err.message);
+        toast.error(formatApiError(err));
       },
     },
   );

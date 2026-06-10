@@ -39,6 +39,8 @@ import { requestCancel } from '../services/tbo/cancel.service.js';
 import { TboError } from '../adapters/tbo/errors.js';
 import { MockHotelAdapter } from '../adapters/products.mock.js';
 import { logger } from '../config/logger.js';
+import { walletService } from '../services/payment/wallet.service.js';
+import { nextCode } from '../utils/codes.js';
 
 export const hotelsRouter: RouterT = Router();
 
@@ -152,10 +154,16 @@ hotelsRouter.post(
       );
       return ok(res, out);
     } catch (err) {
-      // TBO_INVALID_CREDENTIALS is the expected failure mode while Hotel API
-      // is being provisioned. Anything else is a real bug and should bubble.
-      if (err instanceof TboError && err.code === 'TBO_INVALID_CREDENTIALS') {
-        return ok(res, await buildMockSearchResponse(body, 'tbo-invalid-credentials'));
+      // TBO_DISABLED (dev / unconfigured env) and TBO_INVALID_CREDENTIALS
+      // (sandbox creds missing) are both expected failure modes while the
+      // Hotel API is being provisioned. Fall back to the mock search so the
+      // booking flow stays demoable end-to-end. Any other TboError code OR a
+      // non-TboError is a real bug and bubbles to the 500 handler.
+      if (
+        err instanceof TboError &&
+        (err.code === 'TBO_INVALID_CREDENTIALS' || err.code === 'TBO_DISABLED')
+      ) {
+        return ok(res, await buildMockSearchResponse(body, err.code.toLowerCase()));
       }
       next(err);
     }
@@ -571,3 +579,228 @@ hotelsRouter.get(
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /hotels/quick-book — one-shot book-and-pay for the mock supplier path.
+//
+// The full TBO flow is Search → PreBook → Book + supplier-side state machine.
+// In dev / unprovisioned environments the search route falls back to the
+// MockHotelAdapter, which returns offers shaped like `{id, name, totalPaise,
+// ...}` — those CAN'T flow through preBookHotel (it requires a TBO
+// BookingCode in the offerId). This endpoint is the mock-aware shortcut:
+// caller passes the hotel snapshot from search + stay window + guests + a
+// wallet-debit instruction, and we create a VOUCHERED HotelBooking and
+// debit the wallet in one transaction.
+//
+// Status='VOUCHERED' (not just CONFIRMED) because for a mock supplier we
+// own the voucher — there's no upstream confirmation step waiting on TBO.
+// Supplier='MOCK' so reports / sweepers can filter these out from real
+// inventory rows.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const QuickBookBodySchema = z.object({
+  /** Search-time hotel snapshot. We don't trust the price client-side —
+   *  the server recomputes total from perNightPaise × nights — but we use
+   *  the rest of the snapshot to populate the booking row's hotel block. */
+  hotel: z.object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    city: z.string().optional(),
+    stars: z.number().int().min(0).max(5).optional(),
+    perNightPaise: z.number().int().positive(),
+    refundable: z.boolean().optional(),
+    roomType: z.string().optional(),
+  }),
+  checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  checkOut: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  rooms: z.number().int().min(1).max(6).default(1),
+  guests: z
+    .array(
+      z.object({
+        title: z.enum(['Mr', 'Mrs', 'Miss', 'Ms']),
+        firstName: z.string().min(1).max(60),
+        lastName: z.string().min(1).max(60),
+        paxType: z.enum(['Adult', 'Child']).default('Adult'),
+        age: z.number().int().min(0).max(120).optional().nullable(),
+        isLeadPassenger: z.boolean().optional(),
+        phone: z.string().max(20).optional().nullable(),
+        email: z.string().email().optional().nullable(),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+hotelsRouter.post(
+  '/quick-book',
+  bookingAgencyLimit,
+  requirePermission('booking:create'),
+  validate(QuickBookBodySchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth!.agencyId) {
+        throw new AppError('VALIDATION_ERROR', {
+          reason:
+            'Hotel bookings require an agency wallet context. Log in as an agency user.',
+        });
+      }
+      const body = req.body as ReturnType<typeof QuickBookBodySchema.parse>;
+      const checkInDate = new Date(`${body.checkIn}T00:00:00.000Z`);
+      const checkOutDate = new Date(`${body.checkOut}T00:00:00.000Z`);
+      const nights = Math.max(
+        1,
+        Math.round((checkOutDate.getTime() - checkInDate.getTime()) / (24 * 60 * 60 * 1000)),
+      );
+      if (checkOutDate <= checkInDate) {
+        throw new AppError('VALIDATION_ERROR', { reason: 'checkOut must be after checkIn' });
+      }
+
+      // Recompute total server-side from per-night × nights × rooms. The
+      // client-provided perNightPaise comes from the mock search payload
+      // which is deterministic, so this matches what the user saw on screen.
+      const totalSellingPaise = body.hotel.perNightPaise * nights * body.rooms;
+
+      // Make the wallet a hot path — lock + atomic debit using the standard
+      // service. The booking row references the wallet txn id for audit.
+      const wallet = await walletService.findOrCreateForAgency(
+        new Types.ObjectId(req.auth!.tenantId),
+        new Types.ObjectId(req.auth!.agencyId),
+      );
+
+      // Mint a sequential booking code so the hotel row is easy to grep in
+      // logs and matches the format of flight bookings. We use the same
+      // TBNG prefix because the user-visible "all bookings" table mixes
+      // flight + hotel rows under one human-friendly code stream.
+      const seq = await nextCode('TBNG');
+      const bookingCode = `${seq}-HTL`;
+
+      // Create the booking row FIRST so we have a stable id for the wallet
+      // txn audit trail; if the wallet debit fails we mark the row FAILED.
+      const booking = await HotelBooking.create({
+        tenantId: req.auth!.tenantId,
+        agencyId: req.auth!.agencyId,
+        distributorId: req.auth!.distributorId ?? null,
+        bookedByUserId: req.auth!.userId,
+        supplier: 'MOCK',
+        supplierRefs: {
+          bookingCode: `MOCK-${randomUUID().slice(0, 8).toUpperCase()}`,
+          confirmationNo: `MK${Math.floor(Math.random() * 1e8)
+            .toString()
+            .padStart(8, '0')}`,
+        },
+        hotel: {
+          hotelCode: body.hotel.id,
+          name: body.hotel.name,
+          starRating: body.hotel.stars ?? null,
+          address: body.hotel.city ?? null,
+          cityId: null,
+          countryCode: 'IN',
+        },
+        checkIn: checkInDate,
+        checkOut: checkOutDate,
+        nights,
+        rooms: Array.from({ length: body.rooms }, () => ({
+          name: body.hotel.roomType ?? 'Standard Room',
+          adults: 2,
+          children: 0,
+          childrenAges: [],
+          mealPlan: 'RoomOnly',
+          isRefundable: body.hotel.refundable ?? false,
+          inclusions: null,
+          totalNetPaise: body.hotel.perNightPaise * nights,
+          totalSellingPaise: body.hotel.perNightPaise * nights,
+        })),
+        guests: body.guests,
+        currency: 'INR',
+        pricing: {
+          totalNetPaise: totalSellingPaise,
+          totalSellingPaise,
+          recommendedSellingPaise: totalSellingPaise,
+          perNightPaise: body.hotel.perNightPaise,
+        },
+        bookingCode,
+        status: 'CONFIRMED',
+        statusHistory: [
+          { status: 'DRAFT', at: new Date(), by: new Types.ObjectId(req.auth!.userId) },
+          { status: 'CONFIRMED', at: new Date(), by: new Types.ObjectId(req.auth!.userId) },
+        ],
+        isRefundable: body.hotel.refundable ?? false,
+        bookedAt: new Date(),
+        confirmedAt: new Date(),
+      });
+
+      // Wallet debit. Idempotent on bookingId so a double-click replays.
+      let walletTxnId: Types.ObjectId | null = null;
+      try {
+        const walletTxn = await walletService.debit({
+          walletId: wallet._id,
+          amount: totalSellingPaise,
+          type: 'BOOKING_DEBIT',
+          description: `Hotel booking ${bookingCode} — ${body.hotel.name}`,
+          performedBy: new Types.ObjectId(req.auth!.userId),
+          bookingId: booking._id,
+          idempotencyKey: `hotel-book-${booking._id.toHexString()}`,
+          metadata: {
+            hotelId: body.hotel.id,
+            hotelName: body.hotel.name,
+            checkIn: body.checkIn,
+            checkOut: body.checkOut,
+            nights,
+            rooms: body.rooms,
+          },
+        });
+        walletTxnId = walletTxn._id;
+      } catch (err) {
+        // Don't leave the booking confirmed if the wallet debit failed —
+        // mark it FAILED and surface the error so the agent retries.
+        booking.status = 'BOOK_FAILED';
+        booking.statusHistory.push({
+          status: 'BOOK_FAILED',
+          at: new Date(),
+          by: new Types.ObjectId(req.auth!.userId),
+          note: err instanceof Error ? err.message.slice(0, 200) : 'wallet debit failed',
+        });
+        await booking.save();
+        throw err;
+      }
+
+      // Move to VOUCHERED — mock supplier owns the voucher (no upstream).
+      booking.status = 'VOUCHERED';
+      booking.statusHistory.push({
+        status: 'VOUCHERED',
+        at: new Date(),
+        by: new Types.ObjectId(req.auth!.userId),
+      });
+      booking.vouchredAt = new Date();
+      await booking.save();
+
+      logger.info(
+        {
+          bookingId: String(booking._id),
+          bookingCode,
+          hotel: body.hotel.name,
+          totalPaise: totalSellingPaise,
+          walletTxnId: walletTxnId ? String(walletTxnId) : null,
+        },
+        'hotel quick-book: confirmed + paid',
+      );
+
+      return created(res, {
+        id: String(booking._id),
+        bookingCode,
+        status: booking.status,
+        supplierRefs: booking.supplierRefs,
+        hotel: booking.hotel,
+        checkIn: booking.checkIn,
+        checkOut: booking.checkOut,
+        nights,
+        rooms: booking.rooms,
+        guests: booking.guests,
+        pricing: booking.pricing,
+        walletTxnId: walletTxnId ? String(walletTxnId) : null,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);

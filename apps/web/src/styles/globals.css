@@ -28,10 +28,6 @@
     background-color: var(--brand-100);
     color: var(--ink-1);
   }
-  [data-theme='dark'] ::selection {
-    background-color: var(--brand-200);
-    color: var(--ink-1);
-  }
 
   /* Thin scrollbars that don't intrude. */
   ::-webkit-scrollbar {

@@ -8,6 +8,7 @@ import {
 import { Booking } from '../models/Booking.js';
 import { Agency } from '../models/Agency.js';
 import { Distributor } from '../models/Distributor.js';
+import { readAgencyBalances } from './wallet/balance-reader.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -429,6 +430,9 @@ export async function loadDormantAgencies(
     },
   ]);
   const lastMap = new Map(lastBookings.map((r) => [String(r._id), r]));
+  // Canonical balances from the Wallet collection (Phase-15). Fall back to
+  // the legacy Agency.walletBalance only when no Wallet row exists.
+  const balances = await readAgencyBalances(agencies.map((a) => a._id));
 
   const dormant: DormantAgency[] = [];
   for (const a of agencies) {
@@ -441,7 +445,7 @@ export async function loadDormantAgencies(
       agencyCode: a.agencyCode,
       companyName: a.companyName,
       city: a.city,
-      walletBalancePaise: a.walletBalance ?? 0,
+      walletBalancePaise: balances.get(String(a._id)) ?? a.walletBalance ?? 0,
       lastBookingAt: last ? last.toISOString() : null,
       daysSinceLastBooking: last ? Math.floor((Date.now() - last.getTime()) / DAY_MS) : null,
       totalLifetimeBookings: stats?.total ?? 0,

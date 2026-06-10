@@ -11,6 +11,22 @@ const EnvSchema = z.object({
    *  CORS_ORIGINS handles the multi-origin allowlist separately. */
   WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
 
+  /** Public base URL the browser uses to fetch /static/branding/* logos.
+   *  Defaults to API_BASE_URL when blank. Useful when the API sits behind
+   *  a CDN that rewrites /static. */
+  API_PUBLIC_BASE_URL: z.string().url().optional(),
+
+  /** Filesystem root for binary uploads (branding logos for now). Must
+   *  be an absolute or process-cwd-relative path. Mounted as a named
+   *  volume in Docker so files survive container rebuilds. */
+  STORAGE_ROOT: z.string().default('./storage'),
+
+  /** Max accepted logo size in bytes — 2 MiB by default. */
+  BRANDING_LOGO_MAX_BYTES: z.coerce.number().int().min(1024).default(2_097_152),
+
+  /** Resolved-branding cache TTL in seconds. */
+  BRANDING_CACHE_TTL: z.coerce.number().int().min(0).default(60),
+
   MONGO_URI: z.string().min(1),
   MONGO_POOL_SIZE: z.coerce.number().int().default(10),
 
@@ -26,20 +42,49 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   TOTP_ISSUER: z.string().default('TripBng'),
 
-  // Razorpay — set to real keys in prod. Empty in dev means the Razorpay path is disabled
-  // (manual top-ups still work). The transform coerces empty strings to undefined.
-  RAZORPAY_KEY_ID: z
+  // ICICI Orange PG / Pay Gateway (env fallback only — prod should use PaymentGatewayConfig in DB).
+  // The merchant key is the HMAC secret — NEVER log it. Aggregator ID is mandatory for us.
+  ICICI_ORANGE_PG_ENV: z.enum(['UAT', 'PROD']).default('UAT'),
+  ICICI_ORANGE_PG_MERCHANT_ID: z
     .string()
     .optional()
     .transform((v) => (v ? v : undefined)),
-  RAZORPAY_KEY_SECRET: z
+  ICICI_ORANGE_PG_AGGREGATOR_ID: z
     .string()
     .optional()
     .transform((v) => (v ? v : undefined)),
-  RAZORPAY_WEBHOOK_SECRET: z
+  ICICI_ORANGE_PG_KEY: z
     .string()
     .optional()
     .transform((v) => (v ? v : undefined)),
+  ICICI_ORANGE_PG_RETURN_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v ? v : undefined)),
+  ICICI_ORANGE_PG_ADVICE_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal(''))
+    .transform((v) => (v ? v : undefined)),
+  ICICI_ORANGE_PG_INITIATE_SALE_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/v2/initiateSale'),
+  ICICI_ORANGE_PG_COMMAND_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/command'),
+  ICICI_ORANGE_PG_SETTLEMENT_DETAILS_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/settlementDetails'),
+  ICICI_ORANGE_PG_USER_CANCEL_URL: z
+    .string()
+    .url()
+    .default('https://pgpayuat.icicibank.com/tsp/pg/api/userCancel'),
 
   // ASEGO travel insurance. Empty toggles the insurance module off (the routes still
   // mount but will return SERVICE_UNAVAILABLE). Once credentials land, set ASEGO_ENABLED=true
@@ -72,6 +117,30 @@ const EnvSchema = z.object({
   ASEGO_RETRY_COUNT: z.coerce.number().int().default(2),
   ASEGO_CACHE_TTL_MASTER: z.coerce.number().int().default(86_400),
   ASEGO_CACHE_TTL_REASONS: z.coerce.number().int().default(2_592_000),
+
+  // Sentry — backend error tracking. Empty DSN disables the integration
+  // (captureException routes to pino at error-level instead). The DSN is
+  // safe to bake into a public client config (it's a write-only token),
+  // but we read it from env for runtime injection across environments.
+  SENTRY_DSN: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /** Fraction of transactions sampled for performance traces. 0.0 = off,
+   *  1.0 = every request. 0.1 = 10% — sensible default for prod. */
+  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.1),
+  /** Free-text label to differentiate environments on the Sentry side
+   *  ("production", "staging", "dev"). Defaults to NODE_ENV. */
+  SENTRY_ENVIRONMENT: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /** Release identifier — useful when source maps are uploaded so
+   *  stack traces resolve to git refs. Format: `app@version+sha`. */
+  SENTRY_RELEASE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
 
   // PostHog — backend product analytics. Empty key disables the integration
   // (track() becomes a no-op). Project key is the same value the frontend uses;
@@ -149,6 +218,64 @@ const EnvSchema = z.object({
   /** Dedupe window for the "low" tier alert. Critical tier ignores this. */
   WALLET_LOW_ALERT_DEDUPE_HOURS: z.coerce.number().int().min(1).default(24),
 
+  /** Shadow-mode flag for the wallet waterfall (Phase 9, AGENCY_WALLET_SYSTEM
+   *  spec §18). When true, every successful payment also computes what the
+   *  new waterfall WOULD have produced for the split (credit settlement +
+   *  wallet portion + DI incentive + TDS) and emits a structured log line.
+   *  No DB writes from the simulation. Stays on for ~2 weeks of observation;
+   *  flipping false ahead of cutover, then to "active" once the legacy
+   *  walletService.credit call is swapped for waterfall.applyPayment. */
+  SHADOW_WALLET: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .default(false)
+    .transform((v) => v === true || v === 'true'),
+
+  /** Live cutover for the wallet waterfall (Phase 13, AGENCY_WALLET_SYSTEM
+   *  spec §3.1). When true, paymentService.markSuccess routes every
+   *  agency-attributed successful payment through waterfall.applyPayment
+   *  instead of the legacy walletService.credit. This activates:
+   *    • Credit-settlement split for CREDIT-module agencies
+   *    • CreditSettlement snapshot rows
+   *    • Async DI incentive worker hand-off
+   *  Distributor / user-attributed top-ups (no agencyId on the PT) keep
+   *  using the legacy path — the waterfall only knows about agencies.
+   *  When WATERFALL_LIVE=true, SHADOW_WALLET is automatically a no-op
+   *  (the comparison log would be reading the wrong baseline). */
+  WATERFALL_LIVE: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .default(false)
+    .transform((v) => v === true || v === 'true'),
+
+  /** Distributor → sub-agent transfers above this threshold require admin
+   *  approval before they hit the ledger. Set high enough to allow normal
+   *  daily working-capital movement to flow unattended (default ₹50,000
+   *  = 5,000,000 paise per AGENCY_WALLET_SYSTEM spec §3.8). */
+  DISTRIBUTOR_TRANSFER_APPROVAL_THRESHOLD_PAISE: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(5_000_000),
+
+  /** Manual wallet adjustments (admin-posted CREDIT / DEBIT) above this
+   *  threshold require two-person approval per spec §7. Default ₹10,000
+   *  = 1,000,000 paise. The approver MUST be a different SUPER_ADMIN than
+   *  the proposer — the service rejects same-user approvals. */
+  WALLET_ADJUSTMENT_APPROVAL_THRESHOLD_PAISE: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(1_000_000),
+
+  /** Shared-secret authorisation for /internal/* endpoints (booking engine
+   *  → wallet, etc.). When set, calls MUST include the same value in the
+   *  `X-Internal-Key` header. Unset = endpoints reject every request (safe
+   *  default — internal endpoints don't reveal themselves to the web). */
+  INTERNAL_API_KEY: z
+    .string()
+    .min(32)
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+
   // ────────── TripBNG company info (for tax invoices) ──────────
   /** Bill-from legal name on tax invoices. */
   TRIPBNG_LEGAL_NAME: z.string().default('Tankar Solutions Private Limited'),
@@ -167,6 +294,16 @@ const EnvSchema = z.object({
     .default('TripBNG / Tankar Solutions Pvt Ltd — set TRIPBNG_ADDRESS'),
   /** Bill-from PAN (printed alongside GSTIN). */
   TRIPBNG_PAN: z.string().default(''),
+  /** Deductor's Tax-deduction Account Number — printed on Form 16A. The
+   *  same TAN underwrites every quarterly Form 26Q. Production MUST
+   *  override; the placeholder shows up obviously-fake in logs. */
+  TRIPBNG_TAN: z.string().default('MUMT00000A'),
+  /** Officer name on the Form 16A signature block (deductor side). */
+  TRIPBNG_DEDUCTOR_OFFICER_NAME: z
+    .string()
+    .default('Authorised Signatory'),
+  /** Officer designation on the Form 16A signature block. */
+  TRIPBNG_DEDUCTOR_OFFICER_DESIGNATION: z.string().default('Finance Controller'),
   /** Effective GST rate on TripBNG service charges (basis points,
    *  default 1800 = 18%). */
   TRIPBNG_SERVICE_GST_BP: z.coerce.number().int().min(0).max(10_000).default(1800),
@@ -242,6 +379,51 @@ const EnvSchema = z.object({
     .string()
     .url()
     .default('http://api.tektravels.com/BookingEngineService_Air/AirService.svc/rest'),
+  // ────────── TBO Holidays — packaged-holiday API (Phase D placeholder) ──────────
+  // Distinct from the TBO Hotel API above. Spec + sandbox URL not yet
+  // delivered by TBO; the adapter ships as a SKELETON that throws
+  // NOT_IMPLEMENTED until specs land. See
+  // apps/api/src/adapters/holiday/EMAIL_DRAFT.md.
+  TBO_HOLIDAYS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  TBO_HOLIDAYS_USERNAME: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  TBO_HOLIDAYS_PASSWORD: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /** Sandbox + production base URL for TBO Holidays. Placeholder default
+   *  — replace with the real endpoint once TBO sends it. */
+  TBO_HOLIDAYS_BASE_URL: z
+    .string()
+    .url()
+    .default('https://placeholder.tbo-holidays.tektravels.com'),
+
+  // ────────── VFS Global — visa supplier (Phase D placeholder) ──────────
+  // Spec + sandbox URL not yet delivered by VFS; the adapter ships as a
+  // SKELETON that throws NOT_IMPLEMENTED until specs land. See
+  // apps/api/src/adapters/visa/EMAIL_DRAFT.md.
+  VFS_VISA_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  VFS_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  VFS_API_SECRET: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  VFS_BASE_URL: z
+    .string()
+    .url()
+    .default('https://placeholder.vfs-global.local'),
+
   /** Per-supplier search timeout. TBO sandbox routinely takes 20–25s even
    *  when returning "No result found" — and live searches can run longer
    *  with full result sets. 30s default keeps the success rate high without
@@ -380,6 +562,23 @@ const parsed = EnvSchema.safeParse(process.env);
 if (!parsed.success) {
   console.error('Invalid environment configuration:', parsed.error.flatten().fieldErrors);
   process.exit(1);
+}
+
+// Defence-in-depth — reject the `change-me-*` placeholder secrets from
+// .env.example when running production. The Zod schema already enforces
+// `min(32)` but the placeholders satisfy that and would silently boot with
+// well-known signing keys.
+if (parsed.data.NODE_ENV === 'production') {
+  const placeholderPattern = /^change-me-/i;
+  const offenders: string[] = [];
+  if (placeholderPattern.test(parsed.data.JWT_ACCESS_SECRET)) offenders.push('JWT_ACCESS_SECRET');
+  if (placeholderPattern.test(parsed.data.JWT_REFRESH_SECRET)) offenders.push('JWT_REFRESH_SECRET');
+  if (offenders.length > 0) {
+    console.error(
+      `Refusing to boot: production environment is using the placeholder secret(s) from .env.example: ${offenders.join(', ')}. Rotate to real values.`,
+    );
+    process.exit(1);
+  }
 }
 
 export const env = parsed.data;

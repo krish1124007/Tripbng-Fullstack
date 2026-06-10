@@ -15,6 +15,7 @@
 // alongside the admin UI in Phase 6 follow-up.
 
 import { Types } from 'mongoose';
+import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { captureMessage } from '../../config/sentry.js';
 import {
@@ -23,6 +24,7 @@ import {
 } from '../../models/PaymentTransaction.js';
 import { SettlementBatch, type SettlementBatchDoc } from '../../models/SettlementBatch.js';
 import { runWithoutTenant } from '../../middleware/tenant-context.js';
+import { enqueueAlert } from '../alerts/index.js';
 import { paymentService } from './payment.service.js';
 
 export interface GatewayRow {
@@ -131,6 +133,11 @@ export async function reconcileBatch(
     batch.discrepancyCount = report.discrepancyCount;
     batch.status = report.discrepancyCount === 0 ? 'RECONCILED' : 'DISCREPANT';
     batch.reconciledAt = new Date();
+    // Persist the discrepancy detail so the admin UI can drill in without
+    // re-running reconciliation. Capped at 500 rows — beyond that, ops uses
+    // the CSV export. Larger persisted arrays make the batch list query
+    // unnecessarily heavy.
+    batch.discrepancies = report.discrepancies.slice(0, 500);
     await batch.save();
   });
 
@@ -252,17 +259,54 @@ async function reconcileOneRow(
 }
 
 async function emailFinanceTeam(report: ReconciliationReport): Promise<void> {
-  // Real email send happens via existing notification service; for now we
-  // just log a structured warning that ops can grep for.
-  logger.warn(
-    {
-      action: 'finance-alert',
-      batchId: report.batchId,
-      discrepancyCount: report.discrepancyCount,
-      sampleDiscrepancies: report.discrepancies.slice(0, 5),
-    },
-    'TODO-FINANCE-EMAIL: reconciliation discrepancies — wire to notification service',
-  );
+  // Fire a RECON_DISCREPANCY_FOUND alert through the shared queue → routes
+  // to OPS_ALERT_EMAIL via the recipient resolver. The alert pipeline has
+  // its own retry/backoff, so we never want to block reconciliation on
+  // mail delivery — fire-and-forget with a warn-log on enqueue failure.
+  try {
+    const batch = await SettlementBatch.findById(report.batchId)
+      .select('providerCode batchDate')
+      .lean();
+    if (!batch) {
+      logger.warn({ batchId: report.batchId }, 'finance-alert: batch not found, skipping');
+      return;
+    }
+    const webBase = env.WEB_BASE_URL.replace(/\/+$/, '');
+    await enqueueAlert(
+      {
+        event: 'RECON_DISCREPANCY_FOUND',
+        vars: {
+          batchId: report.batchId,
+          providerCode: batch.providerCode,
+          batchDate: batch.batchDate.toISOString().slice(0, 10),
+          discrepancyCount: report.discrepancyCount,
+          matchedCount: report.matchedCount,
+          resolvedCount: report.resolvedCount,
+          sampleDiscrepancies: report.discrepancies.slice(0, 5).map((d) => ({
+            kind: d.kind,
+            gatewayTxnId: d.gatewayTxnId ?? null,
+            paymentTxnCode: d.paymentTxnCode ?? null,
+            detail: d.detail,
+            ourAmount: d.ourAmount ?? null,
+            gatewayAmount: d.gatewayAmount ?? null,
+          })),
+          adminUrl: `${webBase}/admin/reconciliation/${report.batchId}`,
+        },
+      },
+      [{ kind: 'ops' }],
+      {
+        tenantId: 'system',
+        correlationKey: `recon:${report.batchId}`,
+      },
+    );
+  } catch (err) {
+    // Pipeline has its own retry policy; this catch just guards against a
+    // Redis blip taking down the recon job itself.
+    logger.warn(
+      { err, batchId: report.batchId },
+      'finance-alert: enqueue failed (recon report itself unaffected)',
+    );
+  }
 }
 
 function startOfDay(d: Date): Date {

@@ -1,11 +1,22 @@
 // Booking confirmed — receipt-style email + parameterised WA template.
+//
+// `emailAttachments` lazily generates + attaches the e-ticket PDF. The
+// vars don't carry the full Booking doc (would bloat BullMQ jobs), so we
+// look it up by bookingCode at dispatch time. Failure inside the hook is
+// caught by the dispatcher → email still sends, attachment is skipped,
+// ops sees the degradation via the worker's warn log.
 
-import type { AlertPayload, AlertTemplate, BookingAlertVars } from '../types.js';
+import type { Readable } from 'node:stream';
+import { logger } from '../../../config/logger.js';
+import { Booking } from '../../../models/Booking.js';
+import { runWithoutTenant } from '../../../middleware/tenant-context.js';
+import { generateETicketPdf } from '../../booking-pdf.js';
+import type { AlertPayload, AlertTemplate, BookingAlertVars, EmailAttachment } from '../types.js';
 import { rs } from '../types.js';
-import { ctaButton, emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, ctaButton, emailLayout, kvTable } from './_layout.js';
 
 export const bookingConfirmedTemplate: AlertTemplate = {
-  email(payload: AlertPayload) {
+  email(payload: AlertPayload, branding) {
     if (payload.event !== 'BOOKING_CONFIRMED') {
       throw new Error(`bookingConfirmedTemplate.email called with ${payload.event}`);
     }
@@ -14,6 +25,7 @@ export const bookingConfirmedTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Your e-ticket for ${v.sector} on ${v.travelDate} is ready.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">Booking confirmed</h1>
 <p style="margin:0 0 16px;color:#475569;">Your booking is ticketed. The e-ticket is available below.</p>
@@ -25,11 +37,16 @@ ${kvTable([
   ['PNR', v.pnr ?? '—'],
   ['Amount paid', rs(v.amountPaise)],
 ])}
-${v.ticketUrl ? ctaButton('Download e-ticket (PDF)', v.ticketUrl) : ''}
+${v.ticketUrl ? ctaButton('Download e-ticket (PDF)', v.ticketUrl, branding ? { primaryColor: branding.primaryColor, primaryForegroundColor: branding.primaryForegroundColor } : null) : ''}
 <p style="margin:16px 0 0;color:#64748b;font-size:13px;">Please carry a printed or digital copy of the e-ticket along with valid government ID at the airport.</p>`,
     });
     const text = renderText(v);
     return { subject, html, text };
+  },
+
+  async emailAttachments(payload) {
+    if (payload.event !== 'BOOKING_CONFIRMED') return [];
+    return generateAndBufferETicket(payload.vars);
   },
 
   whatsapp(payload) {
@@ -64,6 +81,33 @@ ${v.ticketUrl ? ctaButton('Download e-ticket (PDF)', v.ticketUrl) : ''}
     };
   },
 };
+
+/** Look the booking up by code (already uniquely indexed) and render the
+ *  e-ticket PDF into a Buffer. Wrapped in `runWithoutTenant()` because the
+ *  alert worker drains outside any tenant context. Throws → dispatcher
+ *  catches and sends the email without the attachment. */
+async function generateAndBufferETicket(v: BookingAlertVars): Promise<EmailAttachment[]> {
+  return runWithoutTenant(async () => {
+    const booking = await Booking.findOne({ bookingCode: v.bookingCode });
+    if (!booking) {
+      logger.warn({ bookingCode: v.bookingCode }, 'booking-confirmed attachment: booking not found');
+      return [];
+    }
+    const stream = await generateETicketPdf(booking);
+    const content = await streamToBuffer(stream);
+    const filename = `eticket-${v.pnr ?? v.bookingCode}.pdf`;
+    return [{ filename, content, contentType: 'application/pdf' }];
+  });
+}
+
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  return new Promise<Buffer>((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
 
 function renderText(v: BookingAlertVars): string {
   return [

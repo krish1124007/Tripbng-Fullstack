@@ -216,7 +216,7 @@ function PopularFilters({
   }
 
   return (
-    <div className="flex flex-wrap gap-1.5 px-2 pb-2 pt-1">
+    <div className="flex flex-wrap gap-1 px-2 pb-2 pt-1 sm:gap-1.5">
       <PresetChip
         label={`Non-stop · ${nonstopCount}`}
         active={filters.stops.has(0) && filters.stops.size === 1}

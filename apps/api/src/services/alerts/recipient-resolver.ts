@@ -14,6 +14,7 @@
 import { type NotificationPrefs, DEFAULT_NOTIFICATION_PREFS } from '@tripbng/shared';
 import { Agency, type AgencyDoc } from '../../models/Agency.js';
 import { Booking } from '../../models/Booking.js';
+import { Distributor } from '../../models/Distributor.js';
 import { User } from '../../models/User.js';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
@@ -132,6 +133,32 @@ async function doResolve(ref: RecipientRef): Promise<ResolvedRecipient | null> {
         userId: String(owner._id),
         agencyId: String(ref.id),
         notificationPrefs: extractPrefs(agency),
+      };
+    }
+
+    case 'distributor': {
+      // Mirror of the `agency` case — resolve the distributor's owner user
+      // and honour their per-user opt-outs. Distributor docs don't carry the
+      // same `notificationPrefs` shape (yet); prefs default to null and the
+      // dispatcher falls back to the global default per-event channel set.
+      const distributor = await Distributor.findById(ref.id)
+        .select('ownerUserId tenantId companyName')
+        .lean();
+      if (!distributor?.ownerUserId) return null;
+      const owner = await User.findById(distributor.ownerUserId)
+        .select('email mobile fullName preferences')
+        .lean();
+      if (!owner) return null;
+      return {
+        name: owner.fullName ?? distributor.companyName ?? 'Distributor Owner',
+        email: owner.preferences?.notifications?.email === false ? null : owner.email,
+        mobile: owner.preferences?.notifications?.sms === false ? null : owner.mobile,
+        countryCode: '+91',
+        userId: String(owner._id),
+        // Intentionally leave agencyId null — this recipient is a
+        // distributor, not an agency. Agency-level pref lookup doesn't apply.
+        agencyId: null,
+        notificationPrefs: null,
       };
     }
 

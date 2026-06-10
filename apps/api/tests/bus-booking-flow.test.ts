@@ -27,6 +27,7 @@ import { TravelPolicy } from '../src/models/TravelPolicy.js';
 import { ApprovalRequest } from '../src/models/ApprovalRequest.js';
 import { BusBooking } from '../src/models/BusBooking.js';
 import { WalletTransaction } from '../src/models/WalletTransaction.js';
+import { Wallet } from '../src/models/Wallet.js';
 import { postCredit } from '../src/services/wallet/ledger.js';
 import { submitBusApproval, approveApproval } from '../src/services/approval/approval.service.js';
 import { createBusBooking } from '../src/services/bus/booking.service.js';
@@ -52,6 +53,7 @@ async function reset(): Promise<void> {
     Employee.deleteMany({}),
     TravelPolicy.deleteMany({}),
     WalletTransaction.deleteMany({}),
+    Wallet.deleteMany({}),
     Agency.deleteMany({}),
     Distributor.deleteMany({}),
     Tenant.deleteMany({}),
@@ -286,9 +288,16 @@ describe('createBusBooking — wallet insufficient', () => {
       amountPaise: 100, // tiny + still under the booking total
       performedBy: userId,
     });
-    // Drain via direct $set (test-only) — no public API exists for
-    // arbitrary balance moves.
-    await Agency.updateOne({ _id: agencyId }, { $set: { walletBalance: 1000 } });
+    // Drain via direct $set (test-only) — no public API exists for arbitrary
+    // balance moves. We have to update BOTH the authoritative `Wallet.balance`
+    // (what `postDebit` actually checks) and the legacy `Agency.walletBalance`
+    // cache (read by a handful of older code paths). Touching only the legacy
+    // cache leaves the ledger source-of-truth fully funded, the debit
+    // succeeds, and this test no longer guards what it claims to guard.
+    await Promise.all([
+      Wallet.updateOne({ agencyId }, { $set: { balance: 1000 } }),
+      Agency.updateOne({ _id: agencyId }, { $set: { walletBalance: 1000 } }),
+    ]);
 
     const blockSpy = vi.spyOn(mock, 'blockTicket');
     await expect(

@@ -93,29 +93,29 @@ export function MultiCityView({ parsed, onBookMultiCity }: MultiCityViewProps) {
 
   const [activeLeg, setActiveLeg] = useState(0);
 
-  // Per-leg mutations. We instantiate N mutations up-front (one per
-  // leg) so each has its own isPending / response handlers. The
-  // mutations all hit the same endpoint — TanStack Query keeps them
-  // independent.
+  // Per-leg mutations. Multi-city supports 1..6 segments and React's
+  // rules-of-hooks require a stable hook count across renders — so we
+  // instantiate the max (6) up front and only fire the ones we need.
   //
-  // Hooks-rules: we can't loop `useApiMutation` because hook count
-  // mustn't vary across renders. Multi-city allows 1..6 segments, so
-  // we instantiate the max (6) and only fire the ones we need.
-
+  // We declare six explicit `const`s (instead of looping or building
+  // them inside an array literal) so each call is unambiguously a
+  // top-level hook invocation. The earlier inline-array pattern tripped
+  // `react-hooks/rules-of-hooks` even though the call count was
+  // statically fixed — eslint-disable suppressions are now unnecessary.
   const MAX_LEGS = 6;
+  const legMutation0 = useLegMutation(0, setLegs);
+  const legMutation1 = useLegMutation(1, setLegs);
+  const legMutation2 = useLegMutation(2, setLegs);
+  const legMutation3 = useLegMutation(3, setLegs);
+  const legMutation4 = useLegMutation(4, setLegs);
+  const legMutation5 = useLegMutation(5, setLegs);
   const mutations = [
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useLegMutation(0, setLegs),
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useLegMutation(1, setLegs),
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useLegMutation(2, setLegs),
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useLegMutation(3, setLegs),
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useLegMutation(4, setLegs),
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useLegMutation(5, setLegs),
+    legMutation0,
+    legMutation1,
+    legMutation2,
+    legMutation3,
+    legMutation4,
+    legMutation5,
   ];
 
   // Fire all leg searches once per (segments × class × pax) signature.

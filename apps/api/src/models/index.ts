@@ -11,7 +11,11 @@ export * from './AgencyRegistration.js';
 export * from './AuditLog.js';
 export * from './Supplier.js';
 export * from './SupplierSource.js';
+<<<<<<< HEAD
 export * from './SupplierMap.js';
+=======
+export * from './MapPolicy.js';
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 export * from './Inventory.js';
 export * from './MarkupRule.js';
 export * from './FareRule.js';

@@ -53,6 +53,32 @@ export const supplierAdapterLatency = new Histogram({
   registers: [registry],
 });
 
+export const emailSent = new Counter({
+  name: 'email_sent_total',
+  help: 'Email send attempts via the SMTP channel, labelled by alert event and outcome',
+  // event: AlertEvent name (BOOKING_CONFIRMED / PARTNER_INQUIRY_RECEIVED / …) or
+  //        `direct:<service>` for non-alert-system sends (password-reset, OTP, etc.).
+  // outcome: sent | skipped | failed
+  labelNames: ['event', 'outcome'],
+  registers: [registry],
+});
+
+export const emailSendDuration = new Histogram({
+  name: 'email_send_duration_seconds',
+  help: 'End-to-end SMTP send latency (transport.sendMail wall-clock)',
+  // Buckets tuned for SMTP — most clears in <1s, anything over 10s is broken.
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+  labelNames: ['event', 'outcome'],
+  registers: [registry],
+});
+
+export const emailAttachments = new Counter({
+  name: 'email_attachments_total',
+  help: 'Email attachments sent (e-tickets, invoices, vouchers)',
+  labelNames: ['event'],
+  registers: [registry],
+});
+
 export function statusClass(code: number): string {
   if (code < 200) return '1xx';
   if (code < 300) return '2xx';

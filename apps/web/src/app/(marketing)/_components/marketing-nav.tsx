@@ -109,17 +109,15 @@ export function MarketingNav() {
             })}
           </nav>
 
-          {/* CTA — gradient primary button with shadow glow. The "Apply" link
-              sits left of it as a lightweight ghost so new partners have
-              a path without crowding sign-in. */}
-          <div className="ml-auto hidden items-center gap-2 md:flex">
+          {/* CTA pair — "Apply to partner" is a soft brand-tinted button so
+              it reads as a real action, while "Sign in" stays the primary
+              filled CTA. Keeps the partner path visible without out-shouting
+              the dominant sign-in action. */}
+          <div className="ml-auto hidden items-center gap-3 md:flex">
             {!isSignedIn ? (
-              <Link
-                href="/register"
-                className="text-sm font-medium text-ink-2 transition-colors hover:text-ink-1"
-              >
-                Apply to partner
-              </Link>
+              <Button asChild variant="soft" className="font-semibold">
+                <Link href="/register">Apply to partner</Link>
+              </Button>
             ) : null}
             <Button asChild className="group relative overflow-hidden">
               <Link href={ctaHref}>

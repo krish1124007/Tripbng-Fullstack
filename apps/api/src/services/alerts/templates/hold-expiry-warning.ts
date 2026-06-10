@@ -3,10 +3,10 @@
 // too slow to be actionable.
 
 import type { AlertPayload, AlertTemplate } from '../types.js';
-import { emailLayout, kvTable } from './_layout.js';
+import { brandingForLayout, emailLayout, kvTable } from './_layout.js';
 
 export const holdExpiryWarningTemplate: AlertTemplate = {
-  email(payload) {
+  email(payload, branding) {
     if (payload.event !== 'HOLD_EXPIRY_WARNING') {
       throw new Error(`holdExpiryWarningTemplate.email called with ${payload.event}`);
     }
@@ -15,6 +15,7 @@ export const holdExpiryWarningTemplate: AlertTemplate = {
     const html = emailLayout({
       title: subject,
       preheader: `Confirm soon to avoid losing your fare lock.`,
+      branding: brandingForLayout(branding),
       bodyHtml: `
 <h1 style="margin:0 0 12px;font-size:20px;color:#b45309;">Hold expiring soon</h1>
 <p style="margin:0 0 16px;color:#475569;">Your booking hold expires in <strong>${v.minutesRemaining} minutes</strong>. Confirm now to keep the fare locked.</p>

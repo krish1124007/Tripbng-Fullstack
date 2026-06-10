@@ -19,9 +19,11 @@
 // after a brief delay so the UI flow is exercisable in dev.
 
 import crypto from 'node:crypto';
+import { Types } from 'mongoose';
 import { AppError } from '@tripbng/shared';
 import { logger } from '../config/logger.js';
 import { redis } from '../config/redis.js';
+import { captureException } from '../config/sentry.js';
 import { getSmtpTransport } from '../config/smtp.js';
 import { env } from '../config/env.js';
 import { hashPassword } from '../utils/password.js';
@@ -131,7 +133,7 @@ export async function sendOtp(args: {
   registrationId: string;
   channel: 'mobile' | 'email' | 'whatsapp';
   to: string;
-}): Promise<{ delivered: boolean; devHint?: string }> {
+}): Promise<{ delivered: boolean; error?: string; devHint?: string }> {
   const otp = generateOtp();
   await redis.set(OTP_KEY(args.registrationId, args.channel), hashOtp(otp), 'EX', OTP_TTL_SEC);
 
@@ -141,16 +143,37 @@ export async function sendOtp(args: {
     // so the developer can read it from stdout.
     const transport = getSmtpTransport();
     if (transport) {
+      const start = Date.now();
       try {
-        await transport.sendMail({
+        const info = await transport.sendMail({
           from: env.SMTP_FROM,
           to: args.to,
           replyTo: env.SMTP_REPLY_TO,
           subject: 'Your TripBng verification code',
           text: `Your verification code is ${otp}. It expires in 5 minutes.\n\nIf you didn't request this, ignore the email.`,
         });
+        logger.info(
+          {
+            to: args.to,
+            regId: args.registrationId,
+            messageId: info.messageId ?? null,
+            durationMs: Date.now() - start,
+          },
+          'reg-otp: email sent',
+        );
       } catch (err) {
-        logger.warn({ err, to: args.to }, 'reg-otp: email send failed (otp still logged)');
+        // SMTP failure → caller (route handler) must surface a 502 so the
+        // user knows to retry. Previously we returned `delivered: true`
+        // and the user sat staring at a code that would never arrive.
+        logger.error(
+          { err, to: args.to, regId: args.registrationId, durationMs: Date.now() - start },
+          'reg-otp: email send failed',
+        );
+        return {
+          delivered: false,
+          error: 'email-send-failed',
+          devHint: env.NODE_ENV !== 'production' ? `Dev OTP is ${DEV_OTP}` : undefined,
+        };
       }
     } else {
       logger.info({ to: args.to, otp, regId: args.registrationId }, 'reg-otp: SMTP not configured — OTP logged');
@@ -380,15 +403,35 @@ export async function approveRegistration(args: {
   reg.distributorId = (distributorId as unknown as typeof reg.distributorId) ?? null;
   await reg.save();
 
-  // Send welcome email with temp password. Best-effort — failure
-  // doesn't unwind the approval; reviewer can resend manually.
+  // Send welcome email with temp password. Best-effort — failure doesn't
+  // unwind the approval; reviewer can resend manually via the admin
+  // /resend-welcome endpoint. Failures land in reviewNotes + Sentry so
+  // ops can see them without grep-archaeology of logs.
   void sendApprovalEmail({
     to: reg.email,
     name: `${reg.ownerFirstName} ${reg.ownerLastName}`.trim() || reg.companyName,
     email: reg.email,
     tempPassword,
     agencyCode: agency.agencyCode,
-  }).catch((err) => logger.warn({ err }, 'reg-approve: welcome email failed'));
+  }).catch(async (err) => {
+    logger.error({ err, regId: String(reg._id) }, 'reg-approve: welcome email failed');
+    captureException(err, {
+      tags: { service: 'registration', kind: 'welcome-email' },
+      extra: { regId: String(reg._id), agencyCode: agency.agencyCode },
+    });
+    await AgencyRegistration.updateOne(
+      { _id: reg._id },
+      {
+        $push: {
+          reviewNotes: {
+            at: new Date(),
+            by: new Types.ObjectId(args.reviewerUserId),
+            note: `⚠️ welcome-email send failed: ${err instanceof Error ? err.message : 'unknown'}`,
+          },
+        },
+      },
+    ).catch(() => undefined);
+  });
 
   return {
     agencyId: String(agency._id),
@@ -472,13 +515,99 @@ export async function rejectRegistration(args: {
   reg.reviewedAt = new Date();
   await reg.save();
 
-  // Best-effort notification to the applicant — they should know
-  // why and how to follow up.
+  // Best-effort notification to the applicant — they should know why
+  // and how to follow up. Failures captured for ops visibility (same
+  // pattern as the approval-email path).
   void sendRejectionEmail({
     to: reg.email,
     name: `${reg.ownerFirstName} ${reg.ownerLastName}`.trim() || reg.companyName,
     reason: args.reason,
-  }).catch(() => undefined);
+  }).catch(async (err) => {
+    logger.error({ err, regId: String(reg._id) }, 'reg-reject: rejection email failed');
+    captureException(err, {
+      tags: { service: 'registration', kind: 'rejection-email' },
+      extra: { regId: String(reg._id) },
+    });
+    await AgencyRegistration.updateOne(
+      { _id: reg._id },
+      {
+        $push: {
+          reviewNotes: {
+            at: new Date(),
+            by: new Types.ObjectId(args.reviewerUserId),
+            note: `⚠️ rejection-email send failed: ${err instanceof Error ? err.message : 'unknown'}`,
+          },
+        },
+      },
+    ).catch(() => undefined);
+  });
+}
+
+/** Resend the welcome email for an already-approved registration. Used by
+ *  the admin /resend-welcome endpoint when the original send failed (SMTP
+ *  outage, typo in applicant email that's since been corrected, etc.).
+ *
+ *  Does NOT re-mint the temp password — the original is still valid
+ *  (one-shot, expires on first login). If the agency owner already
+ *  signed in once, the temp password is dead and a separate /forgot-password
+ *  flow is required. */
+export async function resendWelcomeEmail(args: {
+  registrationId: string;
+  triggeredByUserId: string;
+}): Promise<{ resent: boolean; reason?: string }> {
+  const reg = await AgencyRegistration.findById(args.registrationId);
+  if (!reg) throw new AppError('NOT_FOUND');
+  if (reg.status !== 'APPROVED') {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `Registration is ${reg.status}, not APPROVED — cannot resend welcome email`,
+    });
+  }
+  if (!reg.provisionedAgencyId || !reg.provisionedUserId) {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: 'Approved registration is missing provisioned agency / user references',
+    });
+  }
+  const agency = await Agency.findById(reg.provisionedAgencyId).select('agencyCode').lean();
+  if (!agency) {
+    throw new AppError('VALIDATION_ERROR', { reason: 'Provisioned agency record not found' });
+  }
+
+  // Note: we do not re-mint the temp password. The original is either
+  // still valid OR has been consumed by first login — in the latter
+  // case the welcome email's "Temp pass" line is informational only.
+  // If the user needs a real password reset, they go through /forgot-password.
+  try {
+    await sendApprovalEmail({
+      to: reg.email,
+      name: `${reg.ownerFirstName} ${reg.ownerLastName}`.trim() || reg.companyName,
+      email: reg.email,
+      tempPassword: '(use the password from your original email, or reset via /forgot-password)',
+      agencyCode: agency.agencyCode,
+    });
+    await AgencyRegistration.updateOne(
+      { _id: reg._id },
+      {
+        $push: {
+          reviewNotes: {
+            at: new Date(),
+            by: new Types.ObjectId(args.triggeredByUserId),
+            note: '✉️ welcome email resent',
+          },
+        },
+      },
+    );
+    return { resent: true };
+  } catch (err) {
+    logger.error({ err, regId: String(reg._id) }, 'reg-resend: welcome email failed');
+    captureException(err, {
+      tags: { service: 'registration', kind: 'welcome-email-resend' },
+      extra: { regId: String(reg._id) },
+    });
+    return {
+      resent: false,
+      reason: err instanceof Error ? err.message : 'unknown',
+    };
+  }
 }
 
 async function sendRejectionEmail(args: {

@@ -20,7 +20,7 @@ import mongoose, {
 } from 'mongoose';
 
 export const PAYMENT_PURPOSE = ['WALLET_TOPUP', 'BOOKING_PAYMENT', 'REFUND'] as const;
-export const PAYMENT_PROVIDER = ['ICICI_EAZYPAY', 'PHONEPE', 'MANUAL'] as const;
+export const PAYMENT_PROVIDER = ['ICICI_ORANGE_PG', 'PHONEPE', 'MANUAL'] as const;
 export const PAYMENT_INSTRUMENT = [
   'UPI',
   'CARD',

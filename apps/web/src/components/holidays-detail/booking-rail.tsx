@@ -33,6 +33,7 @@ import {
 } from '@/components/ui';
 import { quoteHolidayPackage, type SharingType } from '@/lib/holiday-quote';
 import { useCart } from '@/lib/cart';
+import { BookAndPayDialog } from '@/app/(dashboard)/holidays/packages/[id]/_book-and-pay-dialog';
 
 interface Selection {
   departureDate: string;
@@ -51,6 +52,7 @@ function todayPlus(days: number): string {
 
 export function BookingRail({ pkg }: { pkg: AdminHolidayPackage }) {
   const addToCart = useCart((s) => s.addItem);
+  const [bookOpen, setBookOpen] = useState(false);
 
   const [sel, setSel] = useState<Selection>({
     departureDate: todayPlus(14),
@@ -239,12 +241,25 @@ export function BookingRail({ pkg }: { pkg: AdminHolidayPackage }) {
           </p>
         ) : null}
 
-        <Button onClick={onAdd} size="lg" className="w-full">
-          Add to itinerary <ArrowRight className="h-4 w-4" />
+        <Button
+          onClick={() => {
+            if (sel.adults < 1) {
+              toast.error('At least one adult is required');
+              return;
+            }
+            setBookOpen(true);
+          }}
+          size="lg"
+          className="w-full"
+        >
+          Book &amp; pay ₹{breakdown.totalInr.toLocaleString('en-IN')}{' '}
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+        <Button onClick={onAdd} variant="secondary" size="md" className="w-full">
+          Add to itinerary
         </Button>
         <p className="flex items-center justify-center gap-1 text-[10px] text-ink-3">
-          <CheckCircle2 className="h-3 w-3 text-success" /> Re-priced through your policy chain at
-          checkout.
+          <CheckCircle2 className="h-3 w-3 text-success" /> Wallet debit on confirm.
         </p>
 
         {pkg.fixDeparture ? (
@@ -253,6 +268,21 @@ export function BookingRail({ pkg }: { pkg: AdminHolidayPackage }) {
           </Badge>
         ) : null}
       </CardContent>
+
+      <BookAndPayDialog
+        open={bookOpen}
+        onOpenChange={setBookOpen}
+        pkg={pkg}
+        selection={{
+          departureDate: sel.departureDate,
+          departureCity: sel.departureCity,
+          sharingType: sel.sharingType,
+          adults: sel.adults,
+          childrenWithBed: sel.childrenWithBed,
+          childrenWithoutBed: sel.childrenWithoutBed,
+          totalInr: breakdown.totalInr,
+        }}
+      />
     </Card>
   );
 }

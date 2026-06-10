@@ -22,6 +22,7 @@ import { env, isProd } from '../config/env.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { SupplierAdapterError } from '../adapters/types.js';
 import { enqueueFlightCancelPoll } from '../queues/index.js';
+import { matchManualIssuance } from './booking/manual-issuance-matcher.service.js';
 
 export interface BookingActor {
   tenantId: string;
@@ -399,15 +400,43 @@ export async function confirmBooking(
   actor: BookingActor,
   input: ConfirmBookingRequest,
 ): Promise<BookingDoc> {
-  const booking = await Booking.findOne({
-    _id: input.bookingId,
-    tenantId: actor.tenantId,
-    agencyId: actor.agencyId,
-  });
-  if (!booking) throw new AppError('NOT_FOUND');
-  if (booking.status !== 'HOLD') {
-    throw new AppError('VALIDATION_ERROR', { reason: `booking is ${booking.status}, not HOLD` });
+  // Atomic HOLD → TICKETING_IN_PROGRESS claim. The previous flow read the
+  // booking, checked status, then saved — two concurrent /confirm calls
+  // could both pass the `status === 'HOLD'` check before either save
+  // committed, causing a double wallet debit + double supplier ticket call.
+  // `findOneAndUpdate` with the status in the filter makes the transition
+  // atomic at the Mongo layer: only one caller flips HOLD→TICKETING_IN_PROGRESS;
+  // the loser sees `null` and we surface the same error a status-mismatch
+  // read would have produced.
+  const claimed = await Booking.findOneAndUpdate(
+    {
+      _id: input.bookingId,
+      tenantId: actor.tenantId,
+      agencyId: actor.agencyId,
+      status: 'HOLD',
+    },
+    { $set: { status: 'TICKETING_IN_PROGRESS' } },
+    { new: true },
+  );
+
+  if (!claimed) {
+    // Distinguish "not ours / not found" from "already in flight" so the
+    // client sees the right message. One extra lookup; only on the loser
+    // path, so the happy path stays one round-trip.
+    const existing = await Booking.findOne({
+      _id: input.bookingId,
+      tenantId: actor.tenantId,
+      agencyId: actor.agencyId,
+    })
+      .select({ status: 1, expiresAt: 1 })
+      .lean();
+    if (!existing) throw new AppError('NOT_FOUND');
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `booking is ${existing.status}, not HOLD`,
+    });
   }
+  const booking = claimed;
+
   if (booking.expiresAt && booking.expiresAt < new Date()) {
     booking.status = 'EXPIRED';
     await booking.save();
@@ -420,10 +449,6 @@ export async function confirmBooking(
     }
     throw new AppError('HOLD_EXPIRED');
   }
-
-  // Wallet debit — atomic against the agency's balance. Throws INSUFFICIENT_WALLET on miss.
-  booking.status = 'TICKETING_IN_PROGRESS';
-  await booking.save();
 
   let walletTxnId;
   try {
@@ -443,6 +468,79 @@ export async function confirmBooking(
     booking.status = 'HOLD';
     await booking.save();
     throw err;
+  }
+
+  // ── Phase 5 — Manual issuance gate ──────────────────────────────────────
+  //
+  // Check whether any matching Map Source has `manualIssuance.pendingBooking`
+  // enabled AND the booking matches the criteria block. If so, we SKIP the
+  // supplier API entirely. The wallet was debited above; the booking lands
+  // in PENDING_MANUAL so ops can issue a PNR + supplier reference manually
+  // via the admin endpoint.
+  //
+  // Failure mode: if the matcher throws (DB hiccup, malformed config) the
+  // booking falls through to the normal supplier ticket path. The matcher
+  // is purely additive — it can only narrow the set of bookings that go to
+  // the supplier, never widen it.
+  {
+    const agency = await Agency.findById(actor.agencyId)
+      .select({ agencyGroupIds: 1 })
+      .lean();
+    try {
+      const match = await matchManualIssuance(booking, {
+        tenantId: actor.tenantId,
+        agencyId: actor.agencyId,
+        agencyGroupIds: (agency?.agencyGroupIds ?? []).map(String),
+      });
+      if (match.matched) {
+        booking.status = 'PENDING_MANUAL';
+        booking.paymentMode = input.paymentMode;
+        booking.paymentStatus = 'PAID';
+        booking.walletDebitTxnId = walletTxnId as unknown as typeof booking.walletDebitTxnId;
+        // Preserve audit trail for ops.
+        booking.internalNotes = booking.internalNotes
+          ? `${booking.internalNotes}\nPending manual: ${match.reason ?? 'matched Map Source'}`
+          : `Pending manual: ${match.reason ?? 'matched Map Source'}`;
+        await booking.save();
+        await recordAudit({
+          tenantId: actor.tenantId,
+          actorId: actor.userId,
+          actorRole: actor.role,
+          action: 'booking.routed_to_pending_manual',
+          resource: 'booking',
+          resourceId: String(booking._id),
+          after: {
+            mapSourceId: match.mapSourceId,
+            reason: match.reason,
+            skippedFields: match.skippedFields,
+          },
+          ip: actor.ipAddress ?? null,
+        });
+        track({
+          event: EVENTS.BOOKING_CONFIRMED,
+          distinctId: Actor.agency(actor.agencyId),
+          properties: {
+            booking_code: booking.bookingCode,
+            booking_id: String(booking._id),
+            sector: booking.sector,
+            supplier: booking.supplierCode,
+            payment_mode: input.paymentMode,
+            amount_paise: booking.pricing?.agencyPayablePaise ?? 0,
+            pending_manual: true,
+            map_source_id: match.mapSourceId,
+            tenant_id: actor.tenantId,
+          },
+        });
+        return booking;
+      }
+    } catch (matchErr) {
+      // Don't poison a real booking with a config bug — fall through to the
+      // standard supplier ticket path. Loud log so ops notices.
+      logger.error(
+        { err: matchErr, bookingId: String(booking._id) },
+        'manual-issuance matcher threw — falling back to supplier ticket call',
+      );
+    }
   }
 
   // Issue the ticket via the adapter (series → instant, mock → instant).
@@ -628,6 +726,85 @@ export async function confirmBooking(
   return booking;
 }
 
+/**
+ * issueManually — Phase 5 admin op. Finalizes a PENDING_MANUAL booking by
+ * stamping the PNR + ticket numbers (+ optional supplier reference) ops
+ * obtained out-of-band, then transitions the booking to TICKETED. The
+ * wallet was already debited at confirmBooking time, so no money moves
+ * here — this is a metadata-only write.
+ *
+ * Auth: caller is the admin actor (not the agency that owns the booking).
+ * The route layer enforces `booking:issue-manual`; this function trusts
+ * that gate and only checks tenant scoping.
+ */
+export async function issueManually(
+  actor: BookingActor,
+  bookingId: string,
+  input: {
+    pnr: string;
+    ticketNumbers: string[];
+    supplierBookingRef?: string | null;
+    note?: string | null;
+  },
+): Promise<BookingDoc> {
+  const booking = await Booking.findOne({
+    _id: bookingId,
+    tenantId: actor.tenantId,
+  });
+  if (!booking) throw new AppError('NOT_FOUND');
+  if (booking.status !== 'PENDING_MANUAL') {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `booking is ${booking.status}; only PENDING_MANUAL can be issued manually`,
+    });
+  }
+
+  const before = { status: booking.status, pnr: booking.pnr, supplierBookingRef: booking.supplierBookingRef };
+
+  booking.pnr = input.pnr;
+  booking.ticketNumbers = input.ticketNumbers;
+  if (input.supplierBookingRef) booking.supplierBookingRef = input.supplierBookingRef;
+  booking.status = 'TICKETED';
+  booking.ticketedAt = new Date();
+  if (input.note) {
+    booking.internalNotes = booking.internalNotes
+      ? `${booking.internalNotes}\nManual issue: ${input.note}`
+      : `Manual issue: ${input.note}`;
+  }
+  await booking.save();
+
+  await recordAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.userId,
+    actorRole: actor.role,
+    action: 'booking.issue_manually',
+    resource: 'booking',
+    resourceId: String(booking._id),
+    before,
+    after: {
+      status: booking.status,
+      pnr: booking.pnr,
+      ticketNumbers: booking.ticketNumbers,
+      supplierBookingRef: booking.supplierBookingRef,
+    },
+    ip: actor.ipAddress ?? null,
+  });
+
+  track({
+    event: EVENTS.BOOKING_CONFIRMED,
+    distinctId: Actor.agency(String(booking.agencyId)),
+    properties: {
+      booking_code: booking.bookingCode,
+      booking_id: String(booking._id),
+      sector: booking.sector,
+      supplier: booking.supplierCode,
+      manual_issue: true,
+      tenant_id: actor.tenantId,
+    },
+  });
+
+  return booking;
+}
+
 // cancelBooking — applies the fare-rule cancellation fee (if any), credits the refund to
 // the wallet, releases inventory seats, and marks the booking CANCELLED → REFUNDED.
 export async function cancelBooking(
@@ -642,7 +819,7 @@ export async function cancelBooking(
   });
   if (!booking) throw new AppError('NOT_FOUND');
 
-  if (!['HOLD', 'TICKETED', 'CONFIRMED'].includes(booking.status)) {
+  if (!['HOLD', 'TICKETED', 'CONFIRMED', 'PENDING_MANUAL'].includes(booking.status)) {
     throw new AppError('VALIDATION_ERROR', {
       reason: `cannot cancel a ${booking.status} booking`,
     });
@@ -707,7 +884,29 @@ export async function cancelBooking(
   // if supplierCancellationRef is already set, skip — the cancel-poll
   // worker will handle reconciliation.
   if (booking.supplierBookingRef && !booking.supplierCancellationRef) {
-    try {
+    // TBO LCC pre-filter — refs prefixed with `LCC:<uuid>` are synthetic IDs
+    // the adapter mints at hold-time when the carrier is LCC and the supplier
+    // bookingId only materialises after `ticket()`. If the booking is being
+    // cancelled BEFORE ticketing completes (or after a ticket failure that
+    // left the synthetic ref in place), the cancel call would land at
+    // adapter.cancel() and throw BAD_REQUEST with a noisy FAILED log. Since
+    // an unsold LCC ref means there's nothing on the supplier side to
+    // cancel anyway, short-circuit to PROCESSED + an explanatory note. The
+    // local refund + ledger entries still run normally.
+    if (booking.supplierBookingRef.startsWith('LCC:')) {
+      booking.supplierCancellationStatus = 'PROCESSED';
+      booking.internalNotes = booking.internalNotes
+        ? `${booking.internalNotes}\nSupplier cancel skipped — LCC synthetic ref (no supplier booking to cancel).`
+        : 'Supplier cancel skipped — LCC synthetic ref (no supplier booking to cancel).';
+      logger.info(
+        {
+          bookingId: String(booking._id),
+          supplier: booking.supplierCode,
+          supplierBookingRef: booking.supplierBookingRef,
+        },
+        'supplier cancel skipped — LCC synthetic ref never promoted to bookingId',
+      );
+    } else try {
       const adapter = adapterForCode(booking.supplierCode, actor.tenantId);
       // SeriesAdapter has no supplier behind it — calling cancel() on it
       // returns an ok shape but contributes nothing. Skip cleanly.
@@ -980,6 +1179,7 @@ export function serializeBooking(b: BookingDoc) {
     bookingCode: b.bookingCode,
     status: b.status,
     channel: b.channel,
+    productType: 'FLIGHT' as const,
     flowSubType: b.flowSubType,
     pnr: b.pnr,
     airlinePnr: b.airlinePnr,

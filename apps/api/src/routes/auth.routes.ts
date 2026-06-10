@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   ChangePasswordRequestSchema,
   LoginRequestSchema,
+  TwoFactorBootstrapSetupRequestSchema,
+  TwoFactorBootstrapVerifyRequestSchema,
   TwoFactorVerifyRequestSchema,
   AppError,
   getDefaultPermissionsForRole,
@@ -31,10 +33,16 @@ import { isProd } from '../config/env.js';
 export const authRouter: RouterT = Router();
 
 const REFRESH_COOKIE = 'tripbng_refresh';
+// `sameSite: 'strict'` — the refresh endpoint is same-origin only (the web
+// app + API ship from the same domain in prod, separate processes but the
+// browser sees one origin via reverse-proxy). Setting strict here blocks
+// cross-site POSTs from carrying the cookie even though they trigger
+// preflight — closing the CSRF window the previous `'lax'` left open.
+// httpOnly + secure remain the primary protections.
 const REFRESH_COOKIE_OPTS = {
   httpOnly: true,
   secure: isProd,
-  sameSite: 'lax' as const,
+  sameSite: 'strict' as const,
   path: '/api/v1/auth',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
@@ -47,6 +55,12 @@ authRouter.post('/login', loginLimiter, validate(LoginRequestSchema), async (req
       userAgent: req.header('user-agent') ?? undefined,
     });
     res.cookie(REFRESH_COOKIE, result.refreshToken, REFRESH_COOKIE_OPTS);
+
+    // Set the branding snapshot cookie so the very first authenticated
+    // page paints the tenant theme in SSR (no flash-of-default).
+    // Non-fatal: failures here are logged and don't block login.
+    void seedBrandingCookieForUser(res, result.user).catch(() => {});
+
     return ok(res, {
       accessToken: result.accessToken,
       user: {
@@ -65,6 +79,53 @@ authRouter.post('/login', loginLimiter, validate(LoginRequestSchema), async (req
     next(err);
   }
 });
+
+/**
+ * Look up the branding for the user's agency / distributor and set
+ * the cosmetic `tripbng_branding` snapshot cookie. Resolved entirely
+ * inline — admins / accounts users (who don't own branding) get no
+ * cookie, which is exactly what we want (their portal stays the
+ * platform default).
+ */
+async function seedBrandingCookieForUser(
+  res: import('express').Response,
+  user: Awaited<ReturnType<typeof loginWithPassword>>['user'],
+): Promise<void> {
+  const { resolveBrandingPublic } = await import(
+    '../services/branding/branded-document.service.js'
+  );
+  let subjectKind: 'AGENCY' | 'DISTRIBUTOR' | null = null;
+  let subjectId: string | null = null;
+  if ((user.role === 'AGENCY' || user.role === 'SUB_AGENT') && user.agencyId) {
+    subjectKind = 'AGENCY';
+    subjectId = String(user.agencyId);
+  } else if (user.role === 'DISTRIBUTOR' && user.distributorId) {
+    subjectKind = 'DISTRIBUTOR';
+    subjectId = String(user.distributorId);
+  }
+  if (!subjectKind || !subjectId) return;
+  const pub = await resolveBrandingPublic(String(user.tenantId), subjectKind, subjectId);
+  if (!pub.isActive) return;
+  const slim = {
+    subjectKind: pub.subjectKind,
+    subjectId: pub.subjectId,
+    primaryColor: pub.primaryColor,
+    secondaryColor: pub.secondaryColor,
+    primaryHoverColor: pub.primaryHoverColor,
+    primaryForegroundColor: pub.primaryForegroundColor,
+    isActive: pub.isActive,
+    companyName: pub.companyName,
+    logoPublicUrl: pub.logoPublicUrl,
+    updatedAt: pub.updatedAt,
+  };
+  res.cookie('tripbng_branding', encodeURIComponent(JSON.stringify(slim)), {
+    httpOnly: false,
+    sameSite: 'lax',
+    secure: isProd,
+    path: '/',
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+}
 
 authRouter.post('/refresh', async (req, res, next) => {
   try {
@@ -86,6 +147,9 @@ authRouter.post('/logout', async (req, res, next) => {
     const token: string | undefined = req.cookies?.[REFRESH_COOKIE];
     if (token) await revokeRefreshToken(token);
     res.clearCookie(REFRESH_COOKIE, { ...REFRESH_COOKIE_OPTS, maxAge: 0 });
+    // Wipe the cosmetic branding snapshot too so the next anonymous
+    // visitor doesn't see the previous tenant's colours/logo.
+    res.clearCookie('tripbng_branding', { path: '/' });
     return ok(res, { ok: true });
   } catch (err) {
     next(err);
@@ -259,6 +323,90 @@ authRouter.post(
         action: 'auth.2fa.enable',
         resource: 'user',
         resourceId: req.auth!.userId,
+      });
+      return ok(res, { ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// First-time 2FA enrolment (no session token, password-protected).
+//
+// Breaks the chicken-and-egg in production where a freshly-seeded SUPER_ADMIN
+// can't sign in (2FA gate) and can't reach /2fa/setup (auth gate). The two
+// routes below accept email+password instead of a bearer token, and are
+// strictly limited to users who haven't enrolled yet — re-enrolment from this
+// flow is refused so a stolen password can't rotate a victim's authenticator.
+// ─────────────────────────────────────────────────────────────────────────────
+authRouter.post(
+  '/2fa/bootstrap-setup',
+  loginLimiter,
+  validate(TwoFactorBootstrapSetupRequestSchema),
+  async (req, res, next) => {
+    try {
+      const { email, password } = req.body as ReturnType<
+        typeof TwoFactorBootstrapSetupRequestSchema.parse
+      >;
+      const user = await User.findOne({ email }).select(
+        '+passwordHash +pendingTwoFactorSecret',
+      );
+      if (!user) throw new AppError('INVALID_CREDENTIALS');
+      if (user.status === 'SUSPENDED') throw new AppError('ACCOUNT_SUSPENDED');
+      if (user.status === 'BLOCKED') throw new AppError('ACCOUNT_BLOCKED');
+      const passwordOk = await verifyPassword(password, user.passwordHash);
+      if (!passwordOk) throw new AppError('INVALID_CREDENTIALS');
+      if (user.twoFactorEnabled) throw new AppError('TOTP_ALREADY_ENABLED');
+
+      const secret = generateTotpSecret();
+      const otpauthUrl = buildOtpAuthUrl(user.email, secret);
+      const qrDataUrl = await buildQrDataUrl(otpauthUrl);
+      user.pendingTwoFactorSecret = secret;
+      await user.save();
+      return ok(res, { secret, otpauthUrl, qrDataUrl });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+authRouter.post(
+  '/2fa/bootstrap-verify',
+  loginLimiter,
+  validate(TwoFactorBootstrapVerifyRequestSchema),
+  async (req, res, next) => {
+    try {
+      const { email, password, totp } = req.body as ReturnType<
+        typeof TwoFactorBootstrapVerifyRequestSchema.parse
+      >;
+      const user = await User.findOne({ email }).select(
+        '+passwordHash +pendingTwoFactorSecret +twoFactorSecret',
+      );
+      if (!user) throw new AppError('INVALID_CREDENTIALS');
+      if (user.status === 'SUSPENDED') throw new AppError('ACCOUNT_SUSPENDED');
+      if (user.status === 'BLOCKED') throw new AppError('ACCOUNT_BLOCKED');
+      const passwordOk = await verifyPassword(password, user.passwordHash);
+      if (!passwordOk) throw new AppError('INVALID_CREDENTIALS');
+      if (user.twoFactorEnabled) throw new AppError('TOTP_ALREADY_ENABLED');
+      if (!user.pendingTwoFactorSecret || !verifyTotp(totp, user.pendingTwoFactorSecret)) {
+        throw new AppError('INVALID_TOTP');
+      }
+
+      user.twoFactorSecret = user.pendingTwoFactorSecret;
+      user.pendingTwoFactorSecret = null as unknown as string;
+      user.twoFactorEnabled = true;
+      await user.save();
+
+      await recordAudit({
+        tenantId: String(user.tenantId),
+        actorId: String(user._id),
+        actorRole: user.role as Role,
+        action: 'auth.2fa.bootstrap',
+        resource: 'user',
+        resourceId: String(user._id),
+        ip: req.ip ?? null,
+        userAgent: req.header('user-agent') ?? null,
       });
       return ok(res, { ok: true });
     } catch (err) {

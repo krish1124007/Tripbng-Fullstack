@@ -22,9 +22,15 @@ export const QUEUE_NAMES = {
   TBO_FLIGHT_CANCEL_POLL: 'tbo-flight-cancel-poll',
   SEATSELLER_CITY_SYNC: 'seatseller-city-sync',
   WALLET_MONITOR: 'wallet-monitor',
+  WALLET_INTEGRITY: 'wallet-integrity',
+  DI_INCENTIVE: 'di-incentive',
+  CREDIT_BLOCK_RECOMPUTE: 'credit-block-recompute',
+  CREDIT_DUE_REMINDER: 'credit-due-reminder',
   APPROVAL_EXPIRY_SWEEPER: 'approval-expiry-sweeper',
   BUS_OPERATOR_CANCELLATION_POLLER: 'bus-operator-cancellation-poller',
   KAFILA_TICKET_POLL: 'kafila-ticket-poll',
+  PAYMENT_RECON_SWEEPER: 'payment-recon-sweeper',
+  MANUAL_ISSUANCE_FOLLOWUP: 'manual-issuance-followup',
 } as const;
 
 let holdExpiryQueue: Queue | null = null;
@@ -39,9 +45,15 @@ let tboCancelPollQueue: Queue | null = null;
 let tboFlightCancelPollQueue: Queue | null = null;
 let seatsellerCitySyncQueue: Queue | null = null;
 let walletMonitorQueue: Queue | null = null;
+let walletIntegrityQueue: Queue | null = null;
+let diIncentiveQueue: Queue | null = null;
+let creditBlockRecomputeQueue: Queue | null = null;
+let creditDueReminderQueue: Queue | null = null;
 let approvalExpirySweeperQueue: Queue | null = null;
 let busOperatorCancellationPollerQueue: Queue | null = null;
 let kafilaTicketPollQueue: Queue | null = null;
+let paymentReconSweeperQueue: Queue | null = null;
+let manualIssuanceFollowupQueue: Queue | null = null;
 
 const workers: Worker[] = [];
 
@@ -137,6 +149,34 @@ export function getWalletMonitorQueue(): Queue {
   return walletMonitorQueue;
 }
 
+export function getWalletIntegrityQueue(): Queue {
+  if (!walletIntegrityQueue) {
+    walletIntegrityQueue = new Queue(QUEUE_NAMES.WALLET_INTEGRITY, sharedConnection());
+  }
+  return walletIntegrityQueue;
+}
+
+export function getDiIncentiveQueue(): Queue {
+  if (!diIncentiveQueue) {
+    diIncentiveQueue = new Queue(QUEUE_NAMES.DI_INCENTIVE, sharedConnection());
+  }
+  return diIncentiveQueue;
+}
+
+export function getCreditBlockRecomputeQueue(): Queue {
+  if (!creditBlockRecomputeQueue) {
+    creditBlockRecomputeQueue = new Queue(QUEUE_NAMES.CREDIT_BLOCK_RECOMPUTE, sharedConnection());
+  }
+  return creditBlockRecomputeQueue;
+}
+
+export function getCreditDueReminderQueue(): Queue {
+  if (!creditDueReminderQueue) {
+    creditDueReminderQueue = new Queue(QUEUE_NAMES.CREDIT_DUE_REMINDER, sharedConnection());
+  }
+  return creditDueReminderQueue;
+}
+
 export function getApprovalExpirySweeperQueue(): Queue {
   if (!approvalExpirySweeperQueue) {
     approvalExpirySweeperQueue = new Queue(
@@ -162,6 +202,23 @@ export function getKafilaTicketPollQueue(): Queue {
     kafilaTicketPollQueue = new Queue(QUEUE_NAMES.KAFILA_TICKET_POLL, sharedConnection());
   }
   return kafilaTicketPollQueue;
+}
+
+export function getPaymentReconSweeperQueue(): Queue {
+  if (!paymentReconSweeperQueue) {
+    paymentReconSweeperQueue = new Queue(QUEUE_NAMES.PAYMENT_RECON_SWEEPER, sharedConnection());
+  }
+  return paymentReconSweeperQueue;
+}
+
+export function getManualIssuanceFollowupQueue(): Queue {
+  if (!manualIssuanceFollowupQueue) {
+    manualIssuanceFollowupQueue = new Queue(
+      QUEUE_NAMES.MANUAL_ISSUANCE_FOLLOWUP,
+      sharedConnection(),
+    );
+  }
+  return manualIssuanceFollowupQueue;
 }
 
 /** Enqueue a Kafila ticket-poll job. Booking-service hook: call this
@@ -238,6 +295,16 @@ export async function startWorkers(): Promise<void> {
   const { walletMonitorProcessor, scheduleWalletMonitor } = await import(
     './wallet-monitor.worker.js'
   );
+  const { walletIntegrityProcessor, scheduleWalletIntegrity } = await import(
+    './wallet-integrity.worker.js'
+  );
+  const { diIncentiveProcessor } = await import('./di-incentive.worker.js');
+  const { creditBlockRecomputeProcessor, scheduleCreditBlockRecompute } = await import(
+    './credit-block-recompute.worker.js'
+  );
+  const { creditDueReminderProcessor, scheduleCreditDueReminder } = await import(
+    './credit-due-reminder.worker.js'
+  );
   const { approvalExpirySweeperProcessor, scheduleApprovalExpirySweeper } = await import(
     './approval-expiry-sweeper.worker.js'
   );
@@ -246,6 +313,12 @@ export async function startWorkers(): Promise<void> {
     scheduleBusOperatorCancellationPoller,
   } = await import('./bus-operator-cancellation-poller.worker.js');
   const { kafilaTicketPollProcessor } = await import('./kafila-ticket-poll.worker.js');
+  const { paymentReconSweeperProcessor, schedulePaymentReconSweeper } = await import(
+    './payment-recon-sweeper.worker.js'
+  );
+  const { manualIssuanceFollowupProcessor, scheduleManualIssuanceFollowup } = await import(
+    './manual-issuance-followup.worker.js'
+  );
 
   const opts: WorkerOptions = {
     connection: bullmqRedis,
@@ -358,6 +431,44 @@ export async function startWorkers(): Promise<void> {
   );
   workers.push(
     new Worker(
+      QUEUE_NAMES.WALLET_INTEGRITY,
+      walletIntegrityProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — overlapping ticks would race on per-wallet
+      // `lastReconciledAt` writes and duplicate audit rows. Daily cadence
+      // makes serial execution easy.
+      { ...opts, concurrency: 1 },
+    ),
+  );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.DI_INCENTIVE,
+      diIncentiveProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 5 — the underlying ledger service already serialises
+      // per-agency via Redis lock, so cross-agency parallelism is safe and
+      // desirable when a topup burst lands.
+      { ...opts, concurrency: 5 },
+    ),
+  );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.CREDIT_BLOCK_RECOMPUTE,
+      creditBlockRecomputeProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — single tenant-wide scan per hour, audit writes
+      // would race if overlapping.
+      { ...opts, concurrency: 1 },
+    ),
+  );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.CREDIT_DUE_REMINDER,
+      creditDueReminderProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — daily sweep, Redis dedupe keys race-tolerant but
+      // logging stays clean with serial execution.
+      { ...opts, concurrency: 1 },
+    ),
+  );
+  workers.push(
+    new Worker(
       QUEUE_NAMES.APPROVAL_EXPIRY_SWEEPER,
       approvalExpirySweeperProcessor as (job: Job) => Promise<unknown>,
       // Concurrency 1 — single Mongo updateMany; concurrency adds nothing.
@@ -379,6 +490,25 @@ export async function startWorkers(): Promise<void> {
       // Concurrency 5 — most polls are quick retriveBooking calls; a
       // spike of new PENDING bookings shouldn't serialize.
       { ...opts, concurrency: 5 },
+    ),
+  );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.PAYMENT_RECON_SWEEPER,
+      paymentReconSweeperProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — sweep is fast and bounded (≤100 PTs/tick); overlapping
+      // ticks would risk double-calling markSuccess on the same PT before
+      // the state transition lands.
+      { ...opts, concurrency: 1 },
+    ),
+  );
+  workers.push(
+    new Worker(
+      QUEUE_NAMES.MANUAL_ISSUANCE_FOLLOWUP,
+      manualIssuanceFollowupProcessor as (job: Job) => Promise<unknown>,
+      // Concurrency 1 — single Mongo scan per 4h tick; serial keeps logs
+      // and dedupe-key SETNX behaviour clean.
+      { ...opts, concurrency: 1 },
     ),
   );
 
@@ -408,11 +538,30 @@ export async function startWorkers(): Promise<void> {
   // Wallet monitor — every 15 min by default.
   await scheduleWalletMonitor(getWalletMonitorQueue());
 
+  // Wallet integrity — daily 02:30 IST. Recomputes ledger sums and audits drift.
+  await scheduleWalletIntegrity(getWalletIntegrityQueue());
+
+  // Credit-block recompute — hourly :05 IST. Safety net for time-based
+  // crossings of credit limit / expiry / due-date.
+  await scheduleCreditBlockRecompute(getCreditBlockRecomputeQueue());
+
+  // Credit-due reminder — daily 07:00 IST. T-3 / T-1 / T+0 / T+3 anchors
+  // with Redis dedupe per (agencyId, offset).
+  await scheduleCreditDueReminder(getCreditDueReminderQueue());
+
   // Approval expiry sweeper — every 1 min.
   await scheduleApprovalExpirySweeper(getApprovalExpirySweeperQueue());
 
   // Bus operator-cancellation poller — daily 06:00 IST.
   await scheduleBusOperatorCancellationPoller(getBusOperatorCancellationPollerQueue());
+
+  // Payment-recon sweeper — every 15 min. Catches PG webhook drops by
+  // polling the provider for any PT stuck in PENDING > 30 min.
+  await schedulePaymentReconSweeper(getPaymentReconSweeperQueue());
+
+  // Manual-issuance follow-up — every 4 hours. Nags ops about bookings
+  // sitting in PENDING_MANUAL past tier thresholds (4h / 12h / 24h / 48h).
+  await scheduleManualIssuanceFollowup(getManualIssuanceFollowupQueue());
 
   logger.info({ workers: workers.length, isProd }, 'workers started');
 }
@@ -434,9 +583,15 @@ export async function stopWorkers(): Promise<void> {
       tboFlightCancelPollQueue,
       seatsellerCitySyncQueue,
       walletMonitorQueue,
+      walletIntegrityQueue,
+      diIncentiveQueue,
+      creditBlockRecomputeQueue,
+      creditDueReminderQueue,
       approvalExpirySweeperQueue,
       busOperatorCancellationPollerQueue,
       kafilaTicketPollQueue,
+      paymentReconSweeperQueue,
+      manualIssuanceFollowupQueue,
     ]
       .filter((q): q is Queue => !!q)
       .map((q) => q.close()),
@@ -453,7 +608,13 @@ export async function stopWorkers(): Promise<void> {
   seatsellerCitySyncQueue = null;
   tboFlightCancelPollQueue = null;
   walletMonitorQueue = null;
+  walletIntegrityQueue = null;
+  diIncentiveQueue = null;
+  creditBlockRecomputeQueue = null;
+  creditDueReminderQueue = null;
   approvalExpirySweeperQueue = null;
   busOperatorCancellationPollerQueue = null;
   kafilaTicketPollQueue = null;
+  paymentReconSweeperQueue = null;
+  manualIssuanceFollowupQueue = null;
 }

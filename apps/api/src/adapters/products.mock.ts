@@ -1,23 +1,26 @@
-// Mock supplier adapters for the 5 non-flight products. Each implements a single
-// search/quote method against the shared schema contract. When a real supplier
-// integration ships (Hotelbeds / Travelport for hotels, RedBus partner API for buses,
-// VFS for visa, Tata AIG for insurance), swap the adapter implementation — the
-// service layer + routes stay identical.
+// Mock supplier adapters for the non-flight products that haven't yet been
+// extracted to their own provider directories. Each implements a single
+// search/quote method against the shared schema contract. When a real
+// supplier integration ships (Hotelbeds / Travelport for hotels, RedBus
+// partner API for buses, Tata AIG for insurance), swap the adapter
+// implementation — the service layer + routes stay identical.
 //
 // Same deterministic-seeded RNG approach as the existing series.adapter so the
 // same query yields the same results across pages of pagination / re-renders.
+//
+// Phase D note: HolidayAdapter and VisaAdapter have been moved to dedicated
+// adapter directories under apps/api/src/adapters/{holiday,visa}/ to support
+// the full booking lifecycle (search/priceCheck/book/cancel/fetchStatus).
+// Hotel, bus, and insurance stay here for now — they'll follow the same
+// pattern in their respective phases.
 
 import type {
   BusOption,
   BusSearchRequest,
-  HolidayPackage,
-  HolidaySearchRequest,
   HotelOption,
   HotelSearchRequest,
   InsurancePlan,
   InsuranceQuoteRequest,
-  VisaQuote,
-  VisaQuoteRequest,
 } from '@tripbng/shared';
 
 // ────────── deterministic RNG (seeded) ──────────
@@ -242,189 +245,15 @@ export class MockBusAdapter implements BusAdapter {
   }
 }
 
-// ────────── HOLIDAYS ──────────
+// ────────── HOLIDAYS — extracted to apps/api/src/adapters/holiday/ (Phase D) ──────────
+// MockHolidayAdapter + full HolidaySupplierAdapter lifecycle live there.
+// Re-mounting them here would duplicate the contract; importers should use
+// `holidaySupplier()` from adapters/holiday/registry.js instead.
 
-const HOLIDAY_NAMES: Record<string, readonly string[]> = {
-  default: [
-    'Cultural escape',
-    'Scenic getaway',
-    'Heritage tour',
-    'Hidden gems trail',
-    'Coastal drive',
-  ],
-  Vietnam: [
-    'Cultural & scenic escape',
-    'Heritage trail',
-    'Halong + Hanoi loop',
-    'South coast hopper',
-  ],
-  Bali: ['Island hopper', 'Honeymoon hideaway', 'Volcano + beach combo', 'Spiritual retreat'],
-  Dubai: ['City + desert combo', 'Skyline & souks', 'Family thrill week', 'Luxury escape'],
-  Maldives: ['Overwater escape', 'All-inclusive paradise', 'Snorkel & sunsets'],
-};
+// ────────── VISA — extracted to apps/api/src/adapters/visa/ (Phase D) ──────────
+// Same story as holidays — full VisaSupplierAdapter lifecycle moved out.
+// Importers use `visaSupplier()` from adapters/visa/registry.js.
 
-const ITINERARY_BUILDERS = [
-  ['Arrival & welcome', 'Cultural orientation tour', 'City landmarks'],
-  ['Heritage walk', 'Local cuisine experience', 'Evening transfer'],
-  ['Day trip excursion', 'Beach & relaxation', 'Sunset cruise'],
-  ['Adventure day', 'Spa wellness', 'Departure'],
-] as const;
-
-export interface HolidayAdapter {
-  readonly code: string;
-  readonly name: string;
-  search(req: HolidaySearchRequest): Promise<HolidayPackage[]>;
-}
-
-export class MockHolidayAdapter implements HolidayAdapter {
-  readonly code = 'MOCK_HOLIDAYS';
-  readonly name = 'TripBng Mock Holidays';
-
-  async search(req: HolidaySearchRequest): Promise<HolidayPackage[]> {
-    const seed = hashStr(`${req.destination}|${req.duration}|${req.budget}|${req.theme}`);
-    const r = rng(seed);
-    const nights = parseInt(req.duration, 10) || 5;
-    const baseFare =
-      req.budget === 'luxury'
-        ? 95000
-        : req.budget === 'premium'
-          ? 55000
-          : req.budget === 'mid'
-            ? 32000
-            : 18000;
-    const out: HolidayPackage[] = [];
-    const namesPool = HOLIDAY_NAMES[req.destination] ?? HOLIDAY_NAMES.default!;
-    for (let i = 0; i < 6; i++) {
-      const variant = pick(r, namesPool);
-      const fare = baseFare + range(r, -8000, 28000);
-      const itinerary = Array.from({ length: Math.min(nights, 4) }, (_, d) => {
-        const builder = ITINERARY_BUILDERS[d % ITINERARY_BUILDERS.length]!;
-        return {
-          day: d + 1,
-          title: builder[d % builder.length]!,
-          body:
-            d === 0
-              ? `Arrive in ${req.destination}, hotel transfer, evening at leisure.`
-              : d === Math.min(nights, 4) - 1
-                ? `Final breakfast and airport transfer.`
-                : `Guided exploration with local lunch and evening at leisure.`,
-        };
-      });
-      out.push({
-        id: `${seed}-${i}`,
-        title: `${req.destination} · ${variant}`,
-        destination: req.destination,
-        nights,
-        inclusions:
-          req.budget === 'luxury'
-            ? ['5★ hotels', 'All meals', 'Private guide', 'Premium transfers', 'Sightseeing']
-            : req.budget === 'premium'
-              ? ['4★ hotels', 'Daily breakfast', 'Sightseeing', 'Airport transfers']
-              : ['3★ hotels', 'Daily breakfast', 'Group transfers'],
-        hotels: range(r, 1, Math.min(3, Math.ceil(nights / 2))),
-        cities: [req.destination, pick(r, ['Hanoi', 'Ubud', 'Marina', 'Old town'])].slice(
-          0,
-          range(r, 1, 2),
-        ),
-        perPaxRupees: fare,
-        perPaxFromCurrency: 'INR',
-        flightIncluded: r() > 0.4,
-        imageGradient: pick(r, HOTEL_GRADIENTS),
-        bestSeller: i === 0 || r() > 0.78,
-        themeLabel: req.theme,
-        itinerary,
-      });
-    }
-    return out;
-  }
-}
-
-// ────────── VISA ──────────
-
-const VISA_DOCUMENTS = [
-  'Passport (6+ months validity, 2 blank pages)',
-  'Two recent passport-size photographs (matte, light background)',
-  'Filled visa application form (signed)',
-  'Confirmed return ticket itinerary',
-  'Hotel booking / proof of accommodation',
-  'Bank statements — last 3 months',
-  'Income tax returns — last 2 years',
-  'Travel insurance ≥ ₹30 lakh medical cover',
-] as const;
-
-const VISA_COUNTRY_MAP: Record<
-  string,
-  { name: string; flag: string; kind: string; tat: string; govt: number }
-> = {
-  AE: {
-    name: 'United Arab Emirates',
-    flag: '🇦🇪',
-    kind: 'eVisa (30-day tourist)',
-    tat: '3–4 working days',
-    govt: 6800,
-  },
-  TH: { name: 'Thailand', flag: '🇹🇭', kind: 'Visa-on-arrival', tat: '7 working days', govt: 2200 },
-  SG: { name: 'Singapore', flag: '🇸🇬', kind: 'eVisa', tat: '5–7 working days', govt: 2800 },
-  JP: { name: 'Japan', flag: '🇯🇵', kind: 'Sticker visa', tat: '10–14 working days', govt: 450 },
-  GB: {
-    name: 'United Kingdom',
-    flag: '🇬🇧',
-    kind: 'Standard visitor',
-    tat: '15+ working days',
-    govt: 11400,
-  },
-  US: {
-    name: 'United States',
-    flag: '🇺🇸',
-    kind: 'B1/B2 Tourist',
-    tat: '30+ working days',
-    govt: 16500,
-  },
-  AU: {
-    name: 'Australia',
-    flag: '🇦🇺',
-    kind: 'eVisitor (subclass 651)',
-    tat: '8–10 working days',
-    govt: 9200,
-  },
-  TR: { name: 'Türkiye', flag: '🇹🇷', kind: 'eVisa', tat: '2–3 working days', govt: 4000 },
-};
-
-export interface VisaAdapter {
-  readonly code: string;
-  readonly name: string;
-  quote(req: VisaQuoteRequest): Promise<VisaQuote>;
-}
-
-export class MockVisaAdapter implements VisaAdapter {
-  readonly code = 'MOCK_VISA';
-  readonly name = 'TripBng Mock Visa Partner';
-
-  async quote(req: VisaQuoteRequest): Promise<VisaQuote> {
-    const c = VISA_COUNTRY_MAP[req.country] ?? VISA_COUNTRY_MAP.AE!;
-    const applicants = req.applicants;
-    const serviceFee = 1499 * applicants;
-    const courierFee = 350;
-    const govtFee = c.govt * applicants;
-    const validFrom = new Date(req.travelDate);
-    const validUntil = new Date(req.travelDate.getTime() + 90 * 24 * 3600 * 1000);
-    return {
-      countryName: c.name,
-      countryCode: req.country,
-      flag: c.flag,
-      visaKind: c.kind,
-      processingDays: c.tat,
-      govtFeeRupees: govtFee,
-      serviceFeeRupees: serviceFee,
-      courierFeeRupees: courierFee,
-      totalRupees: govtFee + serviceFee + courierFee,
-      applicants,
-      validFrom: validFrom.toISOString().slice(0, 10),
-      validUntil: validUntil.toISOString().slice(0, 10),
-      documents: [...VISA_DOCUMENTS],
-    };
-  }
-}
 
 // ────────── INSURANCE ──────────
 

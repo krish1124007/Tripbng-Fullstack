@@ -49,7 +49,17 @@ export interface NormalizedFareOption {
 
   segments: ResultSegment[];
   travelClass: TravelClass;
+  /** Supplier's booking-class code (e.g. "YA", "K"). Surfaced separately from
+   *  the agent-facing fare type so masking/filtering at search time can target
+   *  either dimension. */
   fareClass?: string;
+  /** Agent-facing fare type (e.g. "Regular", "SME", "Promo"). Distinct from
+   *  fareClass — fareClass is the supplier's booking code, fareType is what
+   *  the airline marketed the fare as. Populated by adapters whose APIs
+   *  carry it (eTrav, Kafila, AirIQ); undefined for adapters that don't.
+   *  Map Source masking + Map Policy criteria.fareTypes consult this first
+   *  and fall back to fareClass when undefined. */
+  fareType?: string;
 
   // Per-pax base + tax in paise. Pricing engine handles markup/GST on top.
   perPax: {

@@ -14,6 +14,7 @@ import { idempotencyKey } from './middleware/idempotency.js';
 import { sentryErrorHandler } from './config/sentry.js';
 import { healthRouter } from './routes/health.routes.js';
 import { apiRouter } from './routes/index.js';
+import { STORAGE_ROOT_ABS } from './services/storage/local-storage.service.js';
 
 export function createApp(): Express {
   const app = express();
@@ -37,17 +38,17 @@ export function createApp(): Express {
 
   app.use(
     helmet({
-      // Production CSP — locks scripts to self + Razorpay checkout. Dev mode keeps it
-      // permissive so Next dev tooling can hot-reload without yelling.
+      // Production CSP — locks scripts to self. Dev mode keeps it permissive so
+      // Next dev tooling can hot-reload without yelling.
       contentSecurityPolicy: isProd
         ? {
             directives: {
               defaultSrc: ["'self'"],
-              scriptSrc: ["'self'", 'https://checkout.razorpay.com'],
+              scriptSrc: ["'self'"],
               styleSrc: ["'self'", "'unsafe-inline'"],
               imgSrc: ["'self'", 'data:', 'https:'],
-              connectSrc: ["'self'", 'https://api.razorpay.com'],
-              frameSrc: ["'self'", 'https://api.razorpay.com'],
+              connectSrc: ["'self'"],
+              frameSrc: ["'self'"],
               objectSrc: ["'none'"],
               upgradeInsecureRequests: [],
             },
@@ -81,6 +82,29 @@ export function createApp(): Express {
 
   // Health endpoints — bypass /api versioning, used by load balancers
   app.use(healthRouter);
+
+  // Branding logos + future binary assets. Served with long-cache +
+  // immutable since every saved file lives at a UUID-suffixed path
+  // (no reuse). Dotfiles denied to keep .gitkeep etc. invisible.
+  //
+  // CORP override: helmet's default `Cross-Origin-Resource-Policy:
+  // same-origin` blocks <img src="..."> from web (3002) loading
+  // assets served by the API (4002). Logos and other public binaries
+  // need to load from the partner-portal browser, so we explicitly
+  // tag the response with `cross-origin`. The other CSP / X-Frame /
+  // referrer policies set by helmet upstream still apply.
+  app.use(
+    '/static',
+    express.static(STORAGE_ROOT_ABS, {
+      maxAge: '1y',
+      immutable: true,
+      dotfiles: 'deny',
+      fallthrough: false,
+      setHeaders(res) {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      },
+    }),
+  );
 
   // Idempotency-Key honouring on every mutating route below /api/v1.
   // Advisory mode: missing header is allowed (clients without the key still

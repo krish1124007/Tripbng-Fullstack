@@ -10,6 +10,7 @@ import { inventoryRouter } from './inventory.routes.js';
 import { markupRuleRouter } from './markup-rule.routes.js';
 import { fareRuleRouter } from './fare-rule.routes.js';
 import { policyRouter } from './policy.routes.js';
+import { mapPolicyRouter } from './map-policy.routes.js';
 import { agencyGroupRouter } from './agency-group.routes.js';
 import { walletRouter } from './wallet.routes.js';
 import { agencyCreditRouter } from './agency-credit.routes.js';
@@ -19,6 +20,9 @@ import { bookingRouter } from './booking.routes.js';
 import { distributorCockpitRouter } from './distributor-cockpit.routes.js';
 import { notificationRouter } from './notification.routes.js';
 import { bannerRouter } from './banner.routes.js';
+import { updateRouter } from './update.routes.js';
+import { brandingRouter } from './branding.routes.js';
+import { adminBrandingRouter } from './admin-branding.routes.js';
 import { incentiveRouter } from './incentive.routes.js';
 import { amendmentRouter } from './amendment.routes.js';
 import { reportRouter } from './reports.routes.js';
@@ -37,6 +41,9 @@ import { inquiriesRouter } from './inquiries.routes.js';
 import { registrationsRouter } from './registrations.routes.js';
 import { adminRegistrationsRouter } from './admin-registrations.routes.js';
 import { savedPassengerRouter } from './saved-passenger.routes.js';
+import { internalRouter } from './internal.routes.js';
+import { adminAgencyRouter } from './admin-agency.routes.js';
+import { adminHealthRouter } from './admin-health.routes.js';
 
 export const apiRouter: RouterT = Router();
 
@@ -53,8 +60,20 @@ apiRouter.use('/inventories', inventoryRouter);
 apiRouter.use('/markup-rules', markupRuleRouter);
 apiRouter.use('/fare-rules', fareRuleRouter);
 apiRouter.use('/policies', policyRouter);
+apiRouter.use('/map-policies', mapPolicyRouter);
 apiRouter.use('/agency-groups', agencyGroupRouter);
 apiRouter.use('/wallet', walletRouter);
+// /internal/* — booking engine ↔ wallet service-to-service endpoints.
+// Auth via INTERNAL_API_KEY shared secret (see middleware/internal-auth.ts).
+apiRouter.use('/internal', internalRouter);
+// /admin/* — Phase-5 admin endpoints for the wallet/credit/DI/transfer
+// surfaces from Phases 1-4. Requires SUPER_ADMIN role (enforced per-route).
+apiRouter.use('/admin', adminAgencyRouter);
+
+// /health/* — admin-only deep-health endpoints (SMTP probe + test-send).
+// Distinct from the public healthRouter (liveness / readiness) — these
+// expose sensitive operational detail and trigger side effects.
+apiRouter.use('/health', adminHealthRouter);
 apiRouter.use('/search', searchRouter);
 apiRouter.use('/airports', airportRouter);
 
@@ -66,7 +85,7 @@ apiRouter.use('/bus', busRouter);
 // /insurance/quote shadows the legacy mock placeholder in productsRouter.
 apiRouter.use('/insurance', insuranceRouter);
 
-// Payment gateways — ICICI Eazypay + PhonePe + manual top-ups + wallet ops.
+// Payment gateways — ICICI Orange PG + PhonePe + manual top-ups + wallet ops.
 // Webhook + return URLs sit BEFORE auth middleware (handled inside the router).
 apiRouter.use('/payments', paymentsRouter);
 
@@ -124,6 +143,9 @@ apiRouter.use('/admin/registrations', adminRegistrationsRouter);
 apiRouter.use('/bookings', bookingRouter);
 apiRouter.use('/notifications', notificationRouter);
 apiRouter.use('/banners', bannerRouter);
+apiRouter.use('/updates', updateRouter);
+apiRouter.use('/settings/branding', brandingRouter);
+apiRouter.use('/admin/branding', adminBrandingRouter);
 apiRouter.use('/incentives', incentiveRouter);
 apiRouter.use('/amendments', amendmentRouter);
 apiRouter.use('/reports', reportRouter);

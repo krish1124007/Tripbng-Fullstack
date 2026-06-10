@@ -264,7 +264,18 @@ busInvoiceRouter.get(
       const inv = await BusInvoice.findOne({ tenantId: req.auth!.tenantId, bookingId: id });
       if (!inv) throw new AppError('NOT_FOUND', { reason: 'no invoice for this booking' });
 
-      const pdf = await renderBusInvoicePdf(inv);
+      // Resolve agency branding so the PDF header carries their logo
+      // + colours. Falls back to platform defaults when no branding
+      // doc exists or isActive=false.
+      const { resolveForAgencyOrDistributor } = await import(
+        '../services/branding/branded-document.service.js'
+      );
+      const branding = await resolveForAgencyOrDistributor(
+        req.auth!.tenantId,
+        req.auth!.agencyId,
+        null,
+      );
+      const pdf = await renderBusInvoicePdf(inv, branding);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',

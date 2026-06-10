@@ -12,11 +12,6 @@ import { User } from '../../models/User.js';
 import { recordAudit } from '../audit.service.js';
 import { enqueueAlert } from '../alerts/index.js';
 import { postCredit, type WalletKind } from './ledger.js';
-import {
-  createRazorpayOrder,
-  razorpayConfigured,
-  verifyRazorpayPaymentSignature,
-} from './razorpay.js';
 
 const MANUAL_MODES: PaymentMode[] = ['BANK', 'UPI', 'CASH'];
 
@@ -69,9 +64,10 @@ export async function resolveTopupTarget(
 }
 
 // initiateTopup — creates a TopupRequest. Return shape varies by mode:
-//   RAZORPAY → caller opens checkout with the returned order id; verifies later.
 //   BANK/UPI/CASH → request enters PENDING approval queue.
 //   ADMIN_CREDIT → super admin manually credits via /wallet/adjust; not this path.
+// Gateway top-ups (PhonePe / ICICI Orange PG) go through paymentService.initiateTopup
+// instead — that path lives in apps/api/src/services/payment/payment.service.ts.
 export async function initiateTopup(
   ctx: ActorContext,
   input: InitiateTopupRequest,
@@ -88,35 +84,6 @@ export async function initiateTopup(
     distributorId: target.walletKind === 'DISTRIBUTOR' ? target.walletOwnerId : null,
   };
 
-  if (input.paymentMode === 'RAZORPAY') {
-    if (!razorpayConfigured()) {
-      throw new AppError('VALIDATION_ERROR', {
-        reason: 'Razorpay is not configured on this environment — use BANK or UPI instead.',
-      });
-    }
-    // Pre-create the topup record so we have an id to use as receipt; then talk to Razorpay.
-    const topup = await TopupRequest.create(baseDoc);
-    const order = await createRazorpayOrder({
-      amountPaise: input.amountPaise,
-      currency: 'INR',
-      receipt: String(topup._id),
-      notes: { topupId: String(topup._id), tenantId: ctx.tenantId },
-    });
-    topup.razorpayOrderId = order.id;
-    await topup.save();
-    return {
-      topup,
-      response: {
-        mode: 'RAZORPAY',
-        topupId: String(topup._id),
-        razorpayOrderId: order.id,
-        razorpayKeyId: process.env.RAZORPAY_KEY_ID ?? '',
-        amountPaise: order.amount,
-        currency: order.currency,
-      },
-    };
-  }
-
   if (MANUAL_MODES.includes(input.paymentMode)) {
     const topup = await TopupRequest.create({
       ...baseDoc,
@@ -129,63 +96,10 @@ export async function initiateTopup(
     };
   }
 
-  // DEPOSIT / WALLET / CASH variants we haven't implemented yet — guard explicitly.
+  // DEPOSIT / WALLET / CREDIT variants we haven't implemented yet — guard explicitly.
   throw new AppError('VALIDATION_ERROR', {
     reason: `Top-up mode ${input.paymentMode} unsupported`,
   });
-}
-
-// verifyRazorpayTopup — called from the client after checkout-success. Idempotent.
-export async function verifyRazorpayTopup(
-  ctx: ActorContext,
-  topupId: string,
-  razorpayPaymentId: string,
-  razorpayOrderId: string,
-  razorpaySignature: string,
-): Promise<TopupRequestDoc> {
-  const topup = await TopupRequest.findOne({ _id: topupId, tenantId: ctx.tenantId });
-  if (!topup) throw new AppError('NOT_FOUND');
-  if (topup.razorpayOrderId !== razorpayOrderId) throw new AppError('VALIDATION_ERROR');
-
-  // If already settled, return as-is — Razorpay can fire client-callback + webhook for the same payment.
-  if (topup.status === 'APPROVED') return topup;
-
-  if (!verifyRazorpayPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
-    throw new AppError('TOKEN_INVALID', { reason: 'razorpay signature mismatch' });
-  }
-
-  topup.razorpayPaymentId = razorpayPaymentId;
-  topup.razorpaySignature = razorpaySignature;
-
-  const txn = await postCredit({
-    tenantId: ctx.tenantId,
-    walletKind: topup.agencyId ? 'AGENCY' : 'DISTRIBUTOR',
-    walletOwnerId: String(topup.agencyId ?? topup.distributorId),
-    type: 'TOPUP',
-    amountPaise: topup.amountPaise,
-    performedBy: ctx.userId,
-    topupRequestId: String(topup._id),
-    description: `Top-up via Razorpay (payment ${razorpayPaymentId})`,
-    ipAddress: ctx.ipAddress ?? null,
-  });
-
-  topup.status = 'APPROVED';
-  topup.approvedByUserId = ctx.userId as unknown as typeof topup.approvedByUserId;
-  topup.walletTxnId = txn._id;
-  topup.settledAt = new Date();
-  await topup.save();
-
-  await recordAudit({
-    tenantId: ctx.tenantId,
-    actorId: ctx.userId,
-    actorRole: ctx.role,
-    action: 'wallet.topup.razorpay.verify',
-    resource: 'topup',
-    resourceId: String(topup._id),
-    after: { txnId: String(txn._id), amount: topup.amountPaise },
-  });
-
-  return topup;
 }
 
 export async function approveManualTopup(
@@ -330,8 +244,6 @@ export async function serializeTopup(t: TopupRequestDoc) {
     rejectionReason: t.rejectionReason,
     referenceNumber: t.referenceNumber,
     proofUrl: t.proofUrl,
-    razorpayOrderId: t.razorpayOrderId,
-    razorpayPaymentId: t.razorpayPaymentId,
     notes: t.notes,
     walletTxnId: t.walletTxnId ? String(t.walletTxnId) : null,
     createdAt: t.createdAt.toISOString(),

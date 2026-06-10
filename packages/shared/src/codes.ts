@@ -33,6 +33,10 @@ export const CODE_PREFIX = {
   NOTIFICATION: 'NOTIF',
   BANNER: 'BAN',
   INCENTIVE: 'INC',
+  /** Distributor → sub-agent balance transfer. Spec §3.8 + §2.6 in
+   *  AGENCY_WALLET_SYSTEM — anchors approval-pending rows, completed
+   *  transfers, and recalls (a TYPE=RECALL row carries its own ref). */
+  DISTRIBUTOR_TRANSFER: 'DT',
 } as const;
 
 export type CodePrefix = (typeof CODE_PREFIX)[keyof typeof CODE_PREFIX];

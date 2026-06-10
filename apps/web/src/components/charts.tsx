@@ -6,8 +6,11 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -177,5 +180,68 @@ export function TopNBarChart({ data, valueLabel }: { data: SeriesPoint[]; valueL
         <Bar dataKey="value" fill={PRIMARY} radius={[0, 6, 6, 0]} />
       </BarChart>
     </ResponsiveContainer>
+  );
+}
+
+// ───────── Donut (spend mix etc) ─────────
+// Slim ring chart for category breakdowns. Each slice carries its own
+// colour from the slice data — the wallet page uses brand/accent/
+// success/warning/danger tokens to keep slice colours on-theme.
+export interface DonutSlice {
+  label: string;
+  value: number;
+  color: string;
+}
+
+export function CategoryDonut({
+  data,
+  height = 200,
+  formatValue,
+  innerLabel,
+  innerSublabel,
+}: {
+  data: DonutSlice[];
+  height?: number;
+  formatValue?: (v: number) => string;
+  innerLabel?: string;
+  innerSublabel?: string;
+}) {
+  return (
+    <div className="relative" style={{ height }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={data}
+            dataKey="value"
+            nameKey="label"
+            innerRadius="62%"
+            outerRadius="90%"
+            paddingAngle={2}
+            stroke="var(--surface-1)"
+            strokeWidth={2}
+            isAnimationActive={false}
+          >
+            {data.map((d, i) => (
+              <Cell key={i} fill={d.color} />
+            ))}
+          </Pie>
+          <Tooltip
+            contentStyle={tooltipStyle}
+            formatter={(v: number, name: string) => [
+              formatValue ? formatValue(v) : formatPaiseAsINR(v),
+              name,
+            ]}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+      {innerLabel ? (
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-3">
+            {innerSublabel}
+          </p>
+          <p className="font-mono text-base font-bold tabular-nums text-ink-1">{innerLabel}</p>
+        </div>
+      ) : null}
+    </div>
   );
 }

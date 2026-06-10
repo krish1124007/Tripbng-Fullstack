@@ -11,6 +11,7 @@ import {
   type PolicyComponentKey,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -104,12 +105,19 @@ policyRouter.get(
         typeof PaginationQuerySchema.parse
       >;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
+<<<<<<< HEAD
       if (q) filter.name = new RegExp(q, 'i');
       const productType = req.query.productType as string | undefined;
       const status = req.query.status as string | undefined;
       if (productType) filter.productType = productType.toUpperCase();
       if (status) filter.status = status.toUpperCase();
 
+=======
+      {
+        const re = containsRegex(q);
+        if (re) filter.name = re;
+      }
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       const [items, total] = await Promise.all([
         Policy.find(filter)
           .sort({ createdAt: -1 })

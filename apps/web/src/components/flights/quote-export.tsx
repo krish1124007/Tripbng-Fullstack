@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
+import { toast } from 'sonner';
 import {
   Button,
   Dialog,
@@ -96,7 +97,7 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
     } catch (e) {
       console.error('PNG export failed', e);
       setState({ kind: 'idle' });
-      alert('Could not generate the image. Please try again.');
+      toast.error('Could not generate the image. Please try again.');
     }
   }
 
@@ -124,7 +125,7 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
     } catch (e) {
       console.error('PDF export failed', e);
       setState({ kind: 'idle' });
-      alert('Could not generate the PDF. Please try again.');
+      toast.error('Could not generate the PDF. Please try again.');
     }
   }
 
@@ -143,8 +144,8 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
     } catch (e) {
       console.error('Copy image failed', e);
       setState({ kind: 'idle' });
-      alert(
-        'Your browser does not allow copying images directly. Try the "Download image" option instead.',
+      toast.error(
+        'Your browser doesn\'t allow copying images directly. Try the "Download image" option instead.',
       );
     }
   }
@@ -211,20 +212,33 @@ export function QuoteExportDialog({ r, open, onOpenChange }: QuoteExportProps) {
           </label>
 
           {/* Live preview — this is also what gets captured. Scaled
-              down visually but rendered at full size in the DOM. */}
-          <div className="overflow-x-auto rounded-lg border border-stroke-1 bg-surface-2/40 p-3">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-4">
-              Preview
-            </p>
-            <div className="origin-top-left scale-[0.7] md:scale-[0.9]" style={{ width: 720 }}>
-              <QuoteCard
-                ref={quoteRef}
-                r={r}
-                quoteNo={quoteNo}
-                customerName={customerName.trim() || null}
-                agentName={user?.fullName ?? null}
-                agentEmail={user?.email ?? null}
-              />
+              down visually but rendered at full size in the DOM. The
+              outer wrapper caps the visible footprint so the preview
+              never dominates the dialog; users can scroll inside it
+              to see longer quotes. The CSS-scaled inner div doesn't
+              affect layout size (transform: scale doesn't), so we
+              wrap it in a fixed-aspect container with overflow. */}
+          <div className="rounded-lg border border-stroke-1 bg-surface-2/40">
+            <div className="flex items-center justify-between border-b border-stroke-1 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-4">
+                Preview
+              </p>
+              <p className="font-mono text-[10px] text-ink-4">scaled</p>
+            </div>
+            <div className="max-h-[420px] overflow-auto p-3">
+              <div
+                className="origin-top-left scale-[0.55] sm:scale-[0.7] md:scale-[0.82]"
+                style={{ width: 720 }}
+              >
+                <QuoteCard
+                  ref={quoteRef}
+                  r={r}
+                  quoteNo={quoteNo}
+                  customerName={customerName.trim() || null}
+                  agentName={user?.fullName ?? null}
+                  agentEmail={user?.email ?? null}
+                />
+              </div>
             </div>
           </div>
 

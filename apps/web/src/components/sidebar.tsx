@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  AlertOctagon,
   ArrowDownToLine,
   ArrowLeftRight,
   BarChart3,
@@ -13,9 +14,12 @@ import {
   ChevronsLeft,
   ClipboardList,
   Cog,
+  FileSpreadsheet,
   Gift,
   LayoutDashboard,
   Megaphone,
+  Paintbrush,
+  Sparkles,
   Network,
   Percent,
   Receipt,
@@ -70,7 +74,48 @@ const NAV: NavGroup[] = [
     label: 'Insights',
     items: [
       { href: '/reports', label: 'Reports', icon: BarChart3, permission: 'report:run' },
+      {
+        href: '/admin/reports/credit-exposure',
+        label: 'Credit exposure',
+        icon: AlertOctagon,
+        permission: 'report:platform',
+      },
+      {
+        href: '/admin/reports/di-payouts',
+        label: 'DI payouts',
+        icon: Gift,
+        permission: 'report:platform',
+      },
+      {
+        href: '/admin/reports/form-26q',
+        label: 'Form 26Q',
+        icon: Receipt,
+        permission: 'report:platform',
+      },
       { href: '/audit-logs', label: 'Audit log', icon: ShieldCheck, permission: 'audit:read' },
+    ],
+  },
+  {
+    label: 'Wallet ops',
+    items: [
+      {
+        href: '/admin/wallet-ops/adjustments',
+        label: 'Adjustments',
+        icon: Wallet,
+        permission: 'wallet:adjust',
+      },
+      {
+        href: '/admin/wallet-ops/transfers',
+        label: 'Transfer approvals',
+        icon: ArrowLeftRight,
+        permission: 'wallet:adjust',
+      },
+      {
+        href: '/admin/wallet-ops/settlements',
+        label: 'Settlements',
+        icon: FileSpreadsheet,
+        permission: 'wallet:adjust',
+      },
     ],
   },
   {
@@ -79,9 +124,27 @@ const NAV: NavGroup[] = [
       { href: '/inventories', label: 'Manage Inventory', icon: Boxes, permission: 'inventory:read' },
       { href: '/inventories/calendar', label: 'Calendar', icon: CalendarIcon, permission: 'inventory:read' },
       { href: '/suppliers', label: 'Suppliers', icon: Truck, permission: 'supplier:read' },
+<<<<<<< HEAD
       { href: '/markup-rules', label: 'Agency Markup', icon: Percent, permission: 'markup-rule:read' },
       { href: '/fare-rules', label: 'Manage Fare Rule', icon: Receipt, permission: 'fare-rule:read' },
       { href: '/policies', label: 'Manage Policy', icon: Tags, permission: 'policy:read' },
+=======
+      {
+        href: '/suppliers/map-sources',
+        label: 'Map sources',
+        icon: Truck,
+        permission: 'supplier:read',
+      },
+      { href: '/markup-rules', label: 'Markup rules', icon: Percent, permission: 'markup-rule:read' },
+      { href: '/fare-rules', label: 'Fare rules', icon: Receipt, permission: 'fare-rule:read' },
+      { href: '/policies', label: 'Policies', icon: Tags, permission: 'policy:read' },
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
+      {
+        href: '/policies/map-policies',
+        label: 'Map policies',
+        icon: Tags,
+        permission: 'policy:read',
+      },
       {
         href: '/admin/holidays/packages',
         label: 'Holiday packages',
@@ -109,7 +172,14 @@ const NAV: NavGroup[] = [
     label: 'Engagement',
     items: [
       { href: '/banners', label: 'Banners', icon: Megaphone, permission: 'banner:create' },
+      { href: '/updates', label: "What's new", icon: Sparkles, permission: 'update:create' },
       { href: '/incentives', label: 'Incentives', icon: Gift, permission: 'incentive:create' },
+      {
+        href: '/settings/branding',
+        label: 'Branding',
+        icon: Paintbrush,
+        permission: 'branding:update:own',
+      },
     ],
   },
 ];

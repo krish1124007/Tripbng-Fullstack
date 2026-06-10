@@ -27,12 +27,18 @@ import { isValidTransition, PaymentError, type PaymentProviderCode } from '../..
 import { walletService } from './wallet.service.js';
 import { Actor, EVENTS, track } from '../analytics.service.js';
 import { enqueueAlert } from '../alerts/index.js';
+import { env } from '../../config/env.js';
+import { applyPayment, simulatePayment } from '../wallet/waterfall.service.js';
 
 export interface InitiateTopupInput {
   walletId: Types.ObjectId;
   tenantId: Types.ObjectId;
   amount: number;
+<<<<<<< HEAD
   providerCode: 'ICICI_EAZYPAY' | 'ORANGE_PG' | 'PHONEPE' | 'RAZORPAY';
+=======
+  providerCode: 'ICICI_ORANGE_PG' | 'PHONEPE';
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
   initiatedByUserId: Types.ObjectId;
   agencyId?: Types.ObjectId | null;
   agencyName?: string;
@@ -183,21 +189,75 @@ export class PaymentService {
       );
     }
 
-    // Credit the wallet — idempotent on PT id.
+    // ────────── Wallet credit — waterfall vs. legacy ──────────
+    //
+    // Branch:
+    //   env.WATERFALL_LIVE === true  AND  pt.agencyId != null  → waterfall
+    //   otherwise                                              → legacy
+    //
+    // The waterfall handles credit-settlement splits, CreditSettlement
+    // snapshots, and the async DI incentive hand-off. It only knows about
+    // agencies — distributor / user-attributed top-ups (no agencyId on the
+    // PT) keep using the legacy walletService.credit path. The legacy path
+    // also remains the safety net for fast-rollback (flip WATERFALL_LIVE
+    // off in env, no code revert needed).
+    //
+    // The PT's walletTransactionId still links to a single row even when
+    // the waterfall produces two — convention is to link to the TOPUP leg
+    // (bucket=WALLET) so admin UI / drilldown views land in the place
+    // operators expect. When the entire payment goes to credit settlement
+    // (toWallet === 0), we link to the CREDIT_SETTLEMENT leg so the PT is
+    // never orphaned.
     const idempotencyKey = `pt-${pt._id.toHexString()}`;
-    const walletTxn = await walletService.credit({
-      walletId: pt.walletId,
-      amount: pt.amount,
-      type: 'TOPUP',
-      description: `Wallet top-up via ${pt.providerCode}`,
-      performedBy: pt.initiatedByUserId,
-      paymentTransactionId: pt._id,
-      idempotencyKey,
-      metadata: {
-        providerCode: pt.providerCode,
-        gatewayTxnId: details.gatewayTxnId ?? pt.gatewayTxnId,
-      },
-    });
+    let walletTxnLinkId: Types.ObjectId;
+    let walletBalanceAfterForAlert: number | null = null;
+    let waterfallApplied = false;
+
+    if (env.WATERFALL_LIVE && pt.agencyId) {
+      const result = await applyPayment({
+        tenantId: pt.tenantId.toHexString(),
+        agencyId: pt.agencyId.toHexString(),
+        amountPaise: pt.amount,
+        pgReferenceId: details.gatewayTxnId ?? pt.gatewayTxnId ?? `pt-${pt._id.toHexString()}`,
+        pgGateway: pt.providerCode as 'ICICI_ORANGE_PG' | 'PHONEPE' | 'MANUAL',
+        performedBy: pt.initiatedByUserId.toHexString(),
+        description: `Wallet top-up via ${pt.providerCode}`,
+        metadata: { paymentTransactionId: pt._id.toHexString(), idempotencyKey },
+      });
+      waterfallApplied = result.applied;
+      // Pick the link row: prefer the TOPUP leg (it's where most followups
+      // look), fall back to the CREDIT_SETTLEMENT leg if everything went to
+      // settle credit. If `applied === false` (duplicate webhook), the
+      // CreditSettlement row exists but ledgerEntries is empty — leave the
+      // PT linkage unchanged in that case.
+      const topupLeg = result.ledgerEntries.find((l) => l.type === 'TOPUP');
+      const creditLeg = result.ledgerEntries.find((l) => l.type === 'CREDIT_SETTLEMENT');
+      const linkLeg = topupLeg ?? creditLeg;
+      if (linkLeg) {
+        walletTxnLinkId = linkLeg._id;
+      } else {
+        // Duplicate webhook path. PT.walletTransactionId already points at
+        // the row from the first call; preserve it.
+        walletTxnLinkId = pt.walletTransactionId ?? new Types.ObjectId();
+      }
+      walletBalanceAfterForAlert = result.settlement.walletBalanceAfter;
+    } else {
+      const walletTxn = await walletService.credit({
+        walletId: pt.walletId,
+        amount: pt.amount,
+        type: 'TOPUP',
+        description: `Wallet top-up via ${pt.providerCode}`,
+        performedBy: pt.initiatedByUserId,
+        paymentTransactionId: pt._id,
+        idempotencyKey,
+        metadata: {
+          providerCode: pt.providerCode,
+          gatewayTxnId: details.gatewayTxnId ?? pt.gatewayTxnId,
+        },
+      });
+      walletTxnLinkId = walletTxn._id;
+      walletBalanceAfterForAlert = walletTxn.balanceAfter ?? null;
+    }
 
     pushStatusHistory(pt, 'SUCCESS', {
       reason: `verified via ${details.verificationMethod}`,
@@ -217,7 +277,7 @@ export class PaymentService {
     if (details.gatewayResponsePayload !== undefined) {
       pt.gatewayResponsePayload = details.gatewayResponsePayload;
     }
-    pt.walletTransactionId = walletTxn._id;
+    pt.walletTransactionId = walletTxnLinkId;
     await pt.save();
 
     logger.info(
@@ -226,9 +286,73 @@ export class PaymentService {
         txnCode: pt.txnCode,
         amount: pt.amount,
         verificationMethod: details.verificationMethod,
+        // creditPath = how we landed the money: 'waterfall' splits credit
+        // settlement vs. wallet, 'legacy' just credits the wallet flat.
+        // Useful in the rollout window for filtering log slices.
+        creditPath: env.WATERFALL_LIVE && pt.agencyId ? 'waterfall' : 'legacy',
+        waterfallApplied,
       },
       'payment success',
     );
+
+    // ────────── SHADOW_WALLET observation log (Phase 9, spec §18) ──────────
+    //
+    // The legacy walletService.credit above does a flat "amount → wallet"
+    // top-up. The waterfall (waterfall.service.ts:applyPayment) would split
+    // the same payment across credit-settlement + wallet + DI incentive + TDS
+    // based on the agency's module. We're not ready to swap the live path
+    // yet — but for the 2-week shadow window we run simulatePayment() AFTER
+    // the legacy credit and emit a single structured log line that ops can
+    // diff against the real ledger. Failures here MUST NOT poison a
+    // successful payment, so the whole block is fire-and-forget under
+    // try/catch.
+    //
+    // When WATERFALL_LIVE is on the simulation is a no-op — the legacy row
+    // it was diffing against no longer exists, so the comparison would be
+    // meaningless (and noisy). The post-cutover audit shifts from "shadow
+    // vs. live" to "live waterfall vs. expected", which the Phase-10 admin
+    // reports already cover.
+    if (env.SHADOW_WALLET && !env.WATERFALL_LIVE && pt.agencyId) {
+      const agencyId = pt.agencyId.toHexString();
+      const tenantId = pt.tenantId.toHexString();
+      void (async () => {
+        try {
+          const sim = await simulatePayment({
+            tenantId,
+            agencyId,
+            amountPaise: pt.amount,
+            pgReferenceId: pt.gatewayTxnId ?? `pt-${pt._id.toHexString()}`,
+            pgGateway: pt.providerCode as 'ICICI_ORANGE_PG' | 'PHONEPE' | 'MANUAL',
+            performedBy: pt.initiatedByUserId.toHexString(),
+          });
+          logger.info(
+            {
+              shadow: true,
+              ptId: pt._id.toHexString(),
+              txnCode: pt.txnCode,
+              agencyId,
+              module: sim.module,
+              amountPaise: sim.amountReceivedPaise,
+              legacyCreditedToWalletPaise: pt.amount,
+              waterfallAppliedToCreditPaise: sim.appliedToCreditPaise,
+              waterfallAppliedToWalletPaise: sim.appliedToWalletPaise,
+              walletBalanceBeforePaise: sim.walletBalanceBeforePaise,
+              creditUsedBeforePaise: sim.creditUsedBeforePaise,
+              diIncentive: sim.diIncentive,
+              // Drift flag: if these don't match, the agency would have
+              // received a different settlement under the waterfall.
+              wouldHaveDiverged: sim.appliedToCreditPaise > 0 || sim.diIncentive !== null,
+            },
+            'shadow.waterfall: simulation completed',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, ptId: pt._id.toHexString(), agencyId },
+            'shadow.waterfall: simulation failed — payment was still credited via legacy path',
+          );
+        }
+      })();
+    }
 
     track({
       event: EVENTS.TOPUP_SUCCEEDED,
@@ -260,7 +384,7 @@ export class PaymentService {
           txnCode: pt.txnCode,
           amountPaise: pt.amount,
           provider: pt.providerCode,
-          walletBalancePaise: walletTxn.balanceAfter ?? null,
+          walletBalancePaise: walletBalanceAfterForAlert,
         },
       },
       pt.agencyId
@@ -406,6 +530,204 @@ export class PaymentService {
       },
     );
 
+    return pt;
+  }
+
+  // ────────── Refund state transitions ──────────
+  //
+  // The refund lifecycle:
+  //   SUCCESS → REFUND_INITIATED   (we received a refund-accepted webhook OR
+  //                                  the provider's refund() call returned
+  //                                  INITIATED — the gateway acknowledged
+  //                                  the request but hasn't settled)
+  //   REFUND_INITIATED → REFUNDED  (refund-completed webhook OR provider
+  //                                  returned COMPLETED synchronously — at
+  //                                  this moment we MUST debit the wallet
+  //                                  so our balance stays truthful)
+  //   REFUND_INITIATED → FAILED    (refund-failed webhook — undo the
+  //                                  INITIATED transition; no wallet impact)
+  //
+  // Waterfall caveat: if the original topup was applied through the credit-
+  // settlement waterfall (env.WATERFALL_LIVE && agencyId), reversing it
+  // cleanly would require unwinding the split between WALLET / CREDIT /
+  // DEPOSIT_INCENTIVE / TDS_DEDUCT. We don't attempt that here — instead we
+  // mark the PT REFUNDED, emit a `gatewayResponsePayload` audit, and rely
+  // on the ops alert + manual reconciliation. The booking gate already
+  // refuses further drawdown when the agency owes money.
+
+  async markRefundInitiated(
+    paymentTxnId: Types.ObjectId,
+    details: {
+      gatewayRefundId?: string;
+      gatewayResponsePayload?: Record<string, unknown>;
+      reason?: string;
+    },
+  ): Promise<PaymentTransactionDoc> {
+    const pt = await PaymentTransaction.findById(paymentTxnId);
+    if (!pt) throw new AppError('NOT_FOUND');
+    if (pt.status === 'REFUND_INITIATED' || pt.status === 'REFUNDED') return pt;
+    if (!isValidTransition(pt.status, 'REFUND_INITIATED')) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `cannot transition ${pt.status} → REFUND_INITIATED`,
+        pt.providerCode as PaymentProviderCode,
+      );
+    }
+    pushStatusHistory(pt, 'REFUND_INITIATED', {
+      reason: details.reason ?? 'refund requested',
+      actor: 'WEBHOOK',
+    });
+    pt.status = 'REFUND_INITIATED';
+    if (details.gatewayRefundId) pt.gatewayPaymentId = details.gatewayRefundId;
+    if (details.gatewayResponsePayload !== undefined) {
+      pt.gatewayResponsePayload = details.gatewayResponsePayload;
+    }
+    await pt.save();
+    logger.info(
+      {
+        provider: pt.providerCode,
+        txnCode: pt.txnCode,
+        gatewayRefundId: details.gatewayRefundId,
+      },
+      'payment refund initiated',
+    );
+    return pt;
+  }
+
+  async markRefunded(
+    paymentTxnId: Types.ObjectId,
+    details: {
+      gatewayRefundId?: string;
+      gatewayResponsePayload?: Record<string, unknown>;
+      webhookPayloadId?: Types.ObjectId;
+    },
+  ): Promise<PaymentTransactionDoc> {
+    const pt = await PaymentTransaction.findById(paymentTxnId);
+    if (!pt) throw new AppError('NOT_FOUND');
+    if (pt.status === 'REFUNDED') return pt; // idempotent
+    if (!isValidTransition(pt.status, 'REFUNDED')) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `cannot transition ${pt.status} → REFUNDED`,
+        pt.providerCode as PaymentProviderCode,
+      );
+    }
+
+    // Debit the wallet to reverse the original topup. Idempotent via
+    // `pt-${id}-refund` key so duplicate refund-completed webhooks are safe.
+    // We use `allowNegative: true` because the topup may have been spent;
+    // the agency now owes the platform until they re-topup.
+    //
+    // For waterfall'd topups we still post a single TOPUP_REVERSAL row —
+    // ops gets paged via the alert below and manually unwinds the credit-
+    // settlement + DI / TDS legs. Doing it inline would double-spend the
+    // reversal logic into the waterfall service.
+    const wasWaterfall = env.WATERFALL_LIVE && !!pt.agencyId;
+    const idempotencyKey = `pt-${pt._id.toHexString()}-refund`;
+    let walletReversalTxnId: Types.ObjectId | null = null;
+    try {
+      const reversal = await walletService.debit({
+        walletId: pt.walletId,
+        amount: pt.amount,
+        type: 'TOPUP_REVERSAL',
+        description: `Refund of ${pt.txnCode} (gateway-pushed)`,
+        performedBy: 'SYSTEM',
+        paymentTransactionId: pt._id,
+        relatedTxnId: pt.walletTransactionId ?? null,
+        idempotencyKey,
+        allowNegative: true,
+        metadata: {
+          providerCode: pt.providerCode,
+          gatewayRefundId: details.gatewayRefundId,
+          waterfallOriginal: wasWaterfall,
+        },
+      });
+      walletReversalTxnId = reversal._id;
+    } catch (err) {
+      logger.error(
+        { err, txnCode: pt.txnCode, gatewayRefundId: details.gatewayRefundId },
+        'markRefunded: wallet debit FAILED — PT state still flipped to REFUNDED, ops must reconcile manually',
+      );
+      // Continue to mark REFUNDED anyway — the money DID leave the gateway,
+      // and silently leaving the PT in REFUND_INITIATED is worse than a
+      // ledger-mismatch row in the audit log.
+    }
+
+    pushStatusHistory(pt, 'REFUNDED', {
+      reason: 'gateway confirmed refund settled',
+      actor: 'WEBHOOK',
+    });
+    pt.status = 'REFUNDED';
+    pt.refundedAt = new Date();
+    if (details.gatewayRefundId) pt.gatewayPaymentId = details.gatewayRefundId;
+    if (details.gatewayResponsePayload !== undefined) {
+      pt.gatewayResponsePayload = details.gatewayResponsePayload;
+    }
+    if (details.webhookPayloadId) {
+      pt.webhookPayloadId = details.webhookPayloadId;
+      pt.webhookReceivedAt = new Date();
+    }
+    await pt.save();
+
+    logger.info(
+      {
+        provider: pt.providerCode,
+        txnCode: pt.txnCode,
+        amount: pt.amount,
+        gatewayRefundId: details.gatewayRefundId,
+        walletReversalTxnId: walletReversalTxnId?.toHexString(),
+        wasWaterfall,
+      },
+      'payment refunded — wallet reversed',
+    );
+    return pt;
+  }
+
+  async markRefundFailed(
+    paymentTxnId: Types.ObjectId,
+    details: {
+      failureCode?: string;
+      failureReason?: string;
+      gatewayResponsePayload?: Record<string, unknown>;
+    },
+  ): Promise<PaymentTransactionDoc> {
+    const pt = await PaymentTransaction.findById(paymentTxnId);
+    if (!pt) throw new AppError('NOT_FOUND');
+    // Only meaningful from REFUND_INITIATED. From any other state the gateway
+    // can't actually fail a refund (because no refund was ever requested).
+    if (pt.status !== 'REFUND_INITIATED') {
+      logger.warn(
+        { txnCode: pt.txnCode, status: pt.status },
+        'markRefundFailed called on non-REFUND_INITIATED PT — ignoring',
+      );
+      return pt;
+    }
+    if (!isValidTransition(pt.status, 'FAILED')) {
+      throw new PaymentError(
+        'INVALID_STATE_TRANSITION',
+        `cannot transition ${pt.status} → FAILED (refund-failed)`,
+        pt.providerCode as PaymentProviderCode,
+      );
+    }
+    pushStatusHistory(pt, 'FAILED', {
+      reason: details.failureReason ?? details.failureCode ?? 'refund failed',
+      actor: 'WEBHOOK',
+    });
+    pt.status = 'FAILED';
+    pt.failureCode = details.failureCode ?? 'REFUND_FAILED';
+    pt.failureReason = details.failureReason ?? 'gateway reported refund failure';
+    if (details.gatewayResponsePayload !== undefined) {
+      pt.gatewayResponsePayload = details.gatewayResponsePayload;
+    }
+    await pt.save();
+    logger.warn(
+      {
+        provider: pt.providerCode,
+        txnCode: pt.txnCode,
+        failureCode: pt.failureCode,
+      },
+      'payment refund FAILED — wallet untouched',
+    );
     return pt;
   }
 

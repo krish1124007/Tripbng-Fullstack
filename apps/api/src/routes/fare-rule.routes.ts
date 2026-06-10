@@ -12,6 +12,7 @@ import {
   UpdateFareRuleRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -89,6 +90,7 @@ fareRuleRouter.get(
       const { page, limit, q, source, agencyGroup, tripType, cabinType, refundType, airline, status } =
         req.query as unknown as ReturnType<typeof FareRuleListQuerySchema.parse>;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
+<<<<<<< HEAD
       if (q) filter.name = new RegExp(q, 'i');
       if (source) filter.sourceId = source;
       if (agencyGroup) filter.agencyGroupId = agencyGroup;
@@ -97,6 +99,12 @@ fareRuleRouter.get(
       if (refundType) filter.refundType = refundType;
       if (airline) filter.airline = airline;
       if (status) filter.status = status;
+=======
+      {
+        const re = containsRegex(q);
+        if (re) filter.name = re;
+      }
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       const [items, total] = await Promise.all([
         FareRule.find(filter)
           .populate('sourceId', 'name')

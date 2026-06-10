@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Plus } from 'lucide-react';
+import { Paintbrush, Plus } from 'lucide-react';
 import type { PublicAgency, PublicDistributor } from '@tripbng/shared';
 import {
   Badge,
@@ -104,6 +105,24 @@ export default function AgenciesPage() {
         accessorKey: 'status',
         cell: ({ getValue }) => <StatusBadge status={getValue() as string} />,
       },
+      {
+        header: '',
+        id: 'actions',
+        cell: ({ row }) => (
+          // Stop propagation so clicking the icon doesn't ALSO fire
+          // the row click which opens the edit drawer.
+          <div onClick={(e) => e.stopPropagation()}>
+            <Link
+              href={`/admin/branding/AGENCY/${row.original.id}`}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-4 transition-colors hover:bg-surface-2 hover:text-brand-700"
+              title="Override branding"
+              aria-label={`Override branding for ${row.original.companyName}`}
+            >
+              <Paintbrush className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        ),
+      },
     ],
     [],
   );
@@ -121,7 +140,7 @@ export default function AgenciesPage() {
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
         <Input
           placeholder="Search company or code"
           value={q}
@@ -129,11 +148,11 @@ export default function AgenciesPage() {
             setQ(e.target.value);
             setPage(1);
           }}
-          className="max-w-sm"
+          className="w-full sm:max-w-sm"
         />
         {me?.role === 'SUPER_ADMIN' ? (
           <Select value={distributorFilter} onValueChange={setDistributorFilter}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-full sm:w-[200px]">
               <SelectValue placeholder="All distributors" />
             </SelectTrigger>
             <SelectContent>

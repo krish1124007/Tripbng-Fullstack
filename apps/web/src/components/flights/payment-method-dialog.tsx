@@ -5,10 +5,9 @@
 // Opens after a successful /bookings/hold call. Lets the agent pick
 // how to settle the ticket:
 //
-//   • Wallet         — instant if balance ≥ totalToPay → confirm → ticket
-//   • ICICI Eazypay  — redirect to ICICI's PG, on return we top up the
-//                       wallet and auto-confirm
-//   • PhonePe        — same redirect pattern, different provider
+//   • Wallet   — instant if balance ≥ totalToPay → confirm → ticket
+//   • PhonePe  — redirect to PhonePe, on return we top up the wallet
+//                and auto-confirm the booking
 //
 // Gateway flow uses the existing /api/v1/payments/topups/initiate +
 // /api/v1/bookings/confirm endpoints — no new backend needed. We
@@ -45,7 +44,11 @@ import { useAuthStore } from '@/lib/auth-store';
 import { formatPaiseAsINR } from '@/lib/money';
 import { cn } from '@/lib/utils';
 
+<<<<<<< HEAD
 type ProviderCode = 'ICICI_EAZYPAY' | 'ORANGE_PG' | 'PHONEPE';
+=======
+type ProviderCode = 'PHONEPE';
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 
 interface InitiateTopupResponse {
   paymentTxnId: string;
@@ -155,8 +158,8 @@ export function PaymentMethodDialog({
         return;
       }
 
-      // POST redirect — build a self-submitting form. ICICI Eazypay
-      // expects encrypted fields posted to the bank URL.
+      // POST redirect — build a self-submitting form for providers
+      // that require form-encoded posts to the gateway URL.
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = init.redirectUrl;
@@ -180,7 +183,7 @@ export function PaymentMethodDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && !busy && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-[calc(100vw-1rem)] sm:max-w-2xl">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <span className="grid h-9 w-9 place-items-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300">
@@ -233,6 +236,7 @@ export function PaymentMethodDialog({
             cta={walletCovers ? 'Pay & ticket' : creditCovers ? 'Pay via credit' : 'Top up needed'}
           />
 
+<<<<<<< HEAD
           {/* ICICI Eazypay card */}
           <PaymentMethodCard
             icon={CreditCard}
@@ -259,6 +263,8 @@ export function PaymentMethodDialog({
             cta="Continue to Orange PG"
           />
 
+=======
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
           {/* PhonePe card */}
           <PaymentMethodCard
             icon={Smartphone}

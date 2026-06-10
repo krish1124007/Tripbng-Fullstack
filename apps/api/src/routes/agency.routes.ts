@@ -22,6 +22,8 @@ import { requirePermission } from '../middleware/rbac.js';
 import { Agency } from '../models/Agency.js';
 import { createAgency, serializeAgency, updateAgency } from '../services/agency.service.js';
 import { recordAudit } from '../services/audit.service.js';
+import { readAgencyBalance, readAgencyBalances } from '../services/wallet/balance-reader.js';
+import { containsRegex } from '../utils/regex.js';
 
 export const agencyRouter: RouterT = Router();
 
@@ -36,8 +38,9 @@ agencyRouter.get('/', validate(PaginationQuerySchema, 'query'), async (req, res,
     if (req.auth!.role === 'DISTRIBUTOR') filter.distributorId = req.auth!.distributorId;
     if (req.auth!.role === 'AGENCY') filter._id = req.auth!.agencyId;
     if (req.auth!.role === 'SUB_AGENT') filter._id = req.auth!.agencyId;
-    if (q) {
-      filter.$or = [{ companyName: new RegExp(q, 'i') }, { agencyCode: new RegExp(q, 'i') }];
+    {
+      const re = containsRegex(q);
+      if (re) filter.$or = [{ companyName: re }, { agencyCode: re }];
     }
     const [items, total] = await Promise.all([
       Agency.find(filter)
@@ -46,12 +49,16 @@ agencyRouter.get('/', validate(PaginationQuerySchema, 'query'), async (req, res,
         .limit(limit),
       Agency.countDocuments(filter),
     ]);
-    return ok(res, items.map(serializeAgency), {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-    });
+    // Resolve wallet balances in a single round-trip — list endpoints would
+    // otherwise eat an N+1 lookup per row.
+    const balances = await readAgencyBalances(items.map((a) => a._id));
+    return ok(
+      res,
+      items.map((a) =>
+        serializeAgency(a, { walletBalanceOverride: balances.get(String(a._id)) }),
+      ),
+      { page, limit, total, totalPages: Math.ceil(total / limit) },
+    );
   } catch (err) {
     next(err);
   }
@@ -70,7 +77,8 @@ agencyRouter.get('/:id', async (req, res, next) => {
     }
     const agency = await Agency.findOne(filter);
     if (!agency) throw new AppError('AGENCY_NOT_FOUND');
-    return ok(res, serializeAgency(agency));
+    const walletBalanceOverride = await readAgencyBalance(agency._id);
+    return ok(res, serializeAgency(agency, { walletBalanceOverride }));
   } catch (err) {
     next(err);
   }

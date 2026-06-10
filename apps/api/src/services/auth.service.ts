@@ -8,6 +8,7 @@ import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/
 import { verifyPassword } from '../utils/password.js';
 import { verifyTotp } from '../utils/totp.js';
 import { enqueueAlert } from './alerts/index.js';
+import { recordAudit } from './audit.service.js';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
@@ -29,6 +30,33 @@ export interface LoginResult {
   permissions: string[];
 }
 
+// Audit-log helper for login failures. Fire-and-forget; recordAudit already
+// swallows its own errors so a write failure can't poison auth. `actorId`
+// is the user._id when known (bad-password / locked / TOTP failures) and
+// null when the email didn't match any account — distinguishing
+// "wrong-email" from "right-email-wrong-everything-else" is what makes the
+// log forensically useful.
+async function auditLoginFailure(
+  email: string,
+  reason: string,
+  user: UserDoc | null,
+  ctx: LoginContext,
+): Promise<void> {
+  await recordAudit({
+    tenantId: user?.tenantId?.toString() ?? 'unknown',
+    actorId: user?._id?.toString() ?? null,
+    actorRole: (user?.role as string | undefined) ?? null,
+    action: 'auth.login.failed',
+    resource: 'user',
+    resourceId: user?._id?.toString() ?? null,
+    after: { email, reason },
+    ip: ctx.ip ?? null,
+    userAgent: ctx.userAgent ?? null,
+    success: false,
+    error: reason,
+  });
+}
+
 export async function loginWithPassword(
   email: string,
   password: string,
@@ -38,22 +66,35 @@ export async function loginWithPassword(
   const user = await User.findOne({ email }).select(
     '+passwordHash +twoFactorSecret +failedLoginAttempts +lockedUntil',
   );
-  if (!user) throw new AppError('INVALID_CREDENTIALS');
+  if (!user) {
+    await auditLoginFailure(email, 'INVALID_CREDENTIALS', null, ctx);
+    throw new AppError('INVALID_CREDENTIALS');
+  }
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
+    await auditLoginFailure(email, 'ACCOUNT_LOCKED', user, ctx);
     throw new AppError('ACCOUNT_LOCKED');
   }
-  if (user.status === 'SUSPENDED') throw new AppError('ACCOUNT_SUSPENDED');
-  if (user.status === 'BLOCKED') throw new AppError('ACCOUNT_BLOCKED');
+  if (user.status === 'SUSPENDED') {
+    await auditLoginFailure(email, 'ACCOUNT_SUSPENDED', user, ctx);
+    throw new AppError('ACCOUNT_SUSPENDED');
+  }
+  if (user.status === 'BLOCKED') {
+    await auditLoginFailure(email, 'ACCOUNT_BLOCKED', user, ctx);
+    throw new AppError('ACCOUNT_BLOCKED');
+  }
 
   const passwordOk = await verifyPassword(password, user.passwordHash);
   if (!passwordOk) {
     user.failedLoginAttempts = (user.failedLoginAttempts ?? 0) + 1;
+    let reason = 'INVALID_CREDENTIALS';
     if (user.failedLoginAttempts >= MAX_FAILED_ATTEMPTS) {
       user.lockedUntil = new Date(Date.now() + LOCKOUT_MS);
       user.failedLoginAttempts = 0;
+      reason = 'ACCOUNT_LOCKED_THRESHOLD';
     }
     await user.save();
+    await auditLoginFailure(email, reason, user, ctx);
     throw new AppError('INVALID_CREDENTIALS');
   }
 
@@ -72,14 +113,19 @@ export async function loginWithPassword(
   const isDevTotpBypass = env.NODE_ENV !== 'production' && totp === '000000';
 
   if (user.role === 'SUPER_ADMIN' && !user.twoFactorEnabled && !isDevTotpBypass) {
+    await auditLoginFailure(email, 'TOTP_ENROLMENT_REQUIRED', user, ctx);
     throw new AppError('TOTP_REQUIRED', {
       reason: 'SUPER_ADMIN accounts must enrol 2FA before sign-in',
       enrolUrl: '/auth/2fa/setup',
     });
   }
   if (user.twoFactorEnabled && !isDevTotpBypass) {
-    if (!totp) throw new AppError('TOTP_REQUIRED');
+    if (!totp) {
+      await auditLoginFailure(email, 'TOTP_REQUIRED', user, ctx);
+      throw new AppError('TOTP_REQUIRED');
+    }
     if (!user.twoFactorSecret || !verifyTotp(totp, user.twoFactorSecret)) {
+      await auditLoginFailure(email, 'INVALID_TOTP', user, ctx);
       throw new AppError('INVALID_TOTP');
     }
   }
@@ -95,6 +141,21 @@ export async function loginWithPassword(
   user.lastLoginAt = new Date();
   user.lastLoginIp = currentIp;
   await user.save();
+
+  // Successful login audit row — paired with auditLoginFailure() so
+  // forensics can replay every login attempt for a given user/email.
+  await recordAudit({
+    tenantId: user.tenantId.toString(),
+    actorId: user._id.toString(),
+    actorRole: user.role,
+    action: 'auth.login.success',
+    resource: 'user',
+    resourceId: user._id.toString(),
+    after: { email, devTotpBypass: isDevTotpBypass || undefined },
+    ip: ctx.ip ?? null,
+    userAgent: ctx.userAgent ?? null,
+    success: true,
+  });
 
   // Fire-and-forget new-device alert. Conservative trigger: previous IP must
   // be set AND the new IP must differ. This catches "logged in from a new

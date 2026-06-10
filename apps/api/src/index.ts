@@ -3,6 +3,8 @@ import { connectMongo, disconnectMongo } from './config/db.js';
 import { connectRedis, disconnectRedis } from './config/redis.js';
 import { env, isTest } from './config/env.js';
 import { logger } from './config/logger.js';
+import { initSentry } from './config/sentry.js';
+import { closeSmtp, verifySmtp } from './config/smtp.js';
 import { startWorkers, stopWorkers } from './queues/index.js';
 import { setReady } from './middleware/health.js';
 import {
@@ -12,6 +14,10 @@ import {
 import { primeIntegrationHealthCache } from './services/integration-status.service.js';
 
 async function main() {
+  // Initialise Sentry FIRST so any error from the DB / Redis connect
+  // is captured. No-op when SENTRY_DSN is unset.
+  await initSentry();
+
   await connectMongo();
   await connectRedis();
 
@@ -33,6 +39,16 @@ async function main() {
   // to take effect immediately on this instance.
   await startOverrideCacheRefresh();
 
+  // SMTP connectivity probe — best-effort, non-blocking. A misconfigured
+  // host / wrong password trips a clear warn on boot instead of failing
+  // silently on the first booking-confirmation send. Skipped when
+  // SMTP_HOST is unset (dev envs without email).
+  void verifySmtp().then((ok) => {
+    if (env.SMTP_HOST) {
+      logger.info({ smtpHost: env.SMTP_HOST, reachable: ok }, 'smtp verify on boot');
+    }
+  }).catch((err) => logger.warn({ err }, 'smtp verify threw on boot'));
+
   // Mark readiness only after Mongo, Redis, and (optionally) workers are wired up. Liveness
   // is independent — it stays true as long as the process is alive.
   setReady(true);
@@ -51,6 +67,7 @@ async function main() {
     server.close(() => logger.info('http server closed'));
     await stopWorkers().catch((err) => logger.error({ err }, 'stopWorkers failed'));
     stopOverrideCacheRefresh();
+    await closeSmtp().catch((err) => logger.warn({ err }, 'closeSmtp failed'));
     await disconnectMongo();
     await disconnectRedis();
     process.exit(0);

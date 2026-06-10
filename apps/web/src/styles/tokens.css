@@ -2,6 +2,18 @@
 
 :root,
 [data-theme='light'] {
+  /* ────────── per-tenant branding ──────────
+     Defaults used at first paint; BrandingThemeProvider overrides
+     these via inline styles on :root once the tenant's resolved
+     branding has been fetched (SSR injection in app/layout.tsx
+     prevents the flash-of-default for already-authenticated users).
+     Edit BRANDING_DEFAULTS in packages/shared/src/schemas/branding.ts
+     to change the platform defaults — keep this in sync. */
+  --color-primary: #0f62fe;
+  --color-primary-hover: #0050d8;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #10b981;
+
   /* ────────── brand ──────────
      Brand blue from the logo. The 500 is screen-tuned (a touch brighter for digital).
      Use 600/700 for hover/pressed states; 50/100 for soft fills. */
@@ -83,70 +95,6 @@
   --duration-slow: 400ms;
 }
 
-[data-theme='dark'] {
-  /* Brand ladder STAYS IDENTICAL across light/dark — brand identity doesn't invert.
-     For "soft fills" on dark surfaces, use bg-brand-500/15 etc. via opacity. */
-  --brand-50: #eef5fc;
-  --brand-100: #d6e7f7;
-  --brand-200: #adcfee;
-  --brand-300: #7ab1e1;
-  --brand-400: #4f94d2;
-  --brand-500: #1f77bd;
-  --brand-600: #175ca1;
-  --brand-700: #0e4985;
-  --brand-800: #0a3768;
-  --brand-900: #07294c;
-
-  --accent-50: #fff6eb;
-  --accent-100: #ffe5c2;
-  --accent-200: #ffcb85;
-  --accent-300: #ffb14f;
-  --accent-400: #ff9a22;
-  --accent-500: #f58a1f;
-  --accent-600: #d6700e;
-  --accent-700: #a55504;
-  --accent-800: #7a3f03;
-  --accent-900: #5a2e02;
-
-  --surface-0: #0a0f1a;
-  --surface-1: #111827;
-  --surface-2: #1f2937;
-  --surface-3: #374151;
-  --surface-glass: rgba(17, 24, 39, 0.72);
-
-  --ink-1: #f1f5f9;
-  --ink-2: #cbd5e1;
-  --ink-3: #94a3b8;
-  --ink-4: #64748b;
-  --ink-5: #475569;
-
-  --border-1: #1f2937;
-  --border-2: #374151;
-
-  --success: #34d399;
-  --success-soft: #064e3b;
-  --warning: #fbbf24;
-  --warning-soft: #78350f;
-  --danger: #f87171;
-  --danger-soft: #7f1d1d;
-  --info: var(--brand-500);
-  --info-soft: var(--brand-100);
-
-  --brand-deep: var(--brand-700);
-  --brand-mid: var(--brand-500);
-  --accent: var(--accent-500);
-  --accent-soft: var(--accent-100);
-
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.30);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.40), 0 2px 4px rgba(0, 0, 0, 0.30);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.50), 0 4px 12px rgba(0, 0, 0, 0.30);
-  --shadow-xl: 0 32px 80px rgba(0, 0, 0, 0.60), 0 8px 24px rgba(0, 0, 0, 0.40);
-  --shadow-brand: 0 8px 32px rgba(31, 119, 189, 0.40);
-  --shadow-card: var(--shadow-sm);
-
-  --ring: rgba(122, 177, 225, 0.50);
-}
 
 /* Respect reduced-motion preference globally. */
 @media (prefers-reduced-motion: reduce) {

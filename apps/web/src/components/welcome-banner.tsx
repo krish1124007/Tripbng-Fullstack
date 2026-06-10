@@ -49,7 +49,7 @@ export function WelcomeBanner({ walletBalancePaise, bookingsCount, firstName }: 
     {
       key: 'topup',
       title: 'Top up your wallet',
-      desc: 'Razorpay UPI, NEFT, or credit. Instant credit on success.',
+      desc: "Bank transfer or NEFT — upload your payment proof, we'll credit in minutes.",
       href: '/topups',
       icon: ArrowDownToLine,
       done: walletBalancePaise > 0,
@@ -57,7 +57,7 @@ export function WelcomeBanner({ walletBalancePaise, bookingsCount, firstName }: 
     {
       key: 'search',
       title: 'Run your first search',
-      desc: 'Series, LCC, and FSC fares on one screen.',
+      desc: 'Compare fares across airlines and suppliers, all on a single screen.',
       href: '/flights',
       icon: PlaneTakeoff,
       done: bookingsCount > 0,
@@ -65,7 +65,7 @@ export function WelcomeBanner({ walletBalancePaise, bookingsCount, firstName }: 
     {
       key: 'book',
       title: 'Issue your first ticket',
-      desc: 'Hold for 30 min, confirm to debit + e-ticket.',
+      desc: 'Book, confirm, and get your e-ticket — wallet debits automatically.',
       href: '/flights',
       icon: Sparkles,
       done: bookingsCount > 0,

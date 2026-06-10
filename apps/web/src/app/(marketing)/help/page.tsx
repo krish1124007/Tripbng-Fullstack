@@ -84,7 +84,7 @@ const CATEGORIES = [
 
 const POPULAR = [
   { q: 'How long does KYC take?', a: 'Self-serve completes in about 24 hours once documents are uploaded. You can run searches the same day; ticketing opens once KYC clears.', href: '#kyc' },
-  { q: 'My wallet top-up didn’t reflect — what now?', a: 'Razorpay UPI takes up to 90 seconds. NEFT/RTGS can take 30 minutes during banking hours. If it’s still missing, check Wallet → Top-ups for status, or call the trade desk with the bank reference.', href: '#wallet' },
+  { q: 'My wallet top-up didn’t reflect — what now?', a: 'Gateway UPI takes up to 90 seconds. NEFT/RTGS can take 30 minutes during banking hours. If it’s still missing, check Wallet → Top-ups for status, or call the trade desk with the bank reference.', href: '#wallet' },
   { q: 'Can I cancel a ticket after issuance?', a: 'Yes — go to Bookings, open the PNR, click Cancel. Refundability depends on the fare class; non-refundable fares only return the TripBng convenience fee.', href: '#search' },
   { q: 'How do I add a sub-agent?', a: 'Settings → Team → Invite. Pick a role (Counter / Manager), set a per-day credit cap, and email the invite. They land on a 2FA setup page.', href: '#agents' },
   { q: 'Where are my GSTR-1 invoices?', a: 'Reports → Invoices → Export. Pick the month, click GSTR-1 JSON or CSV. Files mirror what your accountant uploads to the GST portal.', href: '#invoices' },

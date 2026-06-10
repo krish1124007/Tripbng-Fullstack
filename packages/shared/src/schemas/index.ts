@@ -4,7 +4,11 @@ export * from './user.js';
 export * from './agency.js';
 export * from './distributor.js';
 export * from './supplier.js';
+<<<<<<< HEAD
 export * from './supplier-map.js';
+=======
+export * from './map-policy.js';
+>>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 export * from './audit.js';
 export * from './inventory.js';
 export * from './markup-rule.js';
@@ -32,3 +36,5 @@ export * from './bus.js';
 export * from './approval.js';
 export * from './gst-profile.js';
 export * from './saved-passenger.js';
+export * from './update.js';
+export * from './branding.js';

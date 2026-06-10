@@ -28,6 +28,7 @@ import {
 import {
   approveRegistration,
   rejectRegistration,
+  resendWelcomeEmail,
 } from '../services/registration.service.js';
 import { recordAudit } from '../services/audit.service.js';
 
@@ -93,6 +94,40 @@ adminRegistrationsRouter.get('/:id', async (req, res, next) => {
     const doc = await AgencyRegistration.findById(id).lean();
     if (!doc) throw new AppError('NOT_FOUND');
     return ok(res, doc);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Resend the welcome email for an already-approved registration. Used when
+ *  the original send failed (SMTP outage, applicant email typo since fixed,
+ *  applicant deleted the original by accident, etc.). Does NOT re-mint the
+ *  temp password — see resendWelcomeEmail() doc for the rationale. */
+adminRegistrationsRouter.post('/:id/resend-welcome', async (req, res, next) => {
+  try {
+    const id = String(req.params.id ?? '');
+    if (!Types.ObjectId.isValid(id)) throw new AppError('NOT_FOUND');
+    const result = await resendWelcomeEmail({
+      registrationId: id,
+      triggeredByUserId: req.auth!.userId,
+    });
+    await recordAudit({
+      tenantId: req.auth!.tenantId,
+      actorId: req.auth!.userId,
+      actorRole: req.auth!.role,
+      action: 'registration.resend-welcome',
+      resource: 'agencyRegistration',
+      resourceId: id,
+      after: { resent: result.resent, reason: result.reason ?? null },
+      ip: req.ip ?? null,
+      userAgent: req.header('user-agent') ?? null,
+    });
+    if (!result.resent) {
+      throw new AppError('SUPPLIER_UNAVAILABLE', {
+        reason: result.reason ?? 'Resend failed',
+      });
+    }
+    return ok(res, { resent: true });
   } catch (err) {
     next(err);
   }

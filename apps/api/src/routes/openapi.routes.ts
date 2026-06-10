@@ -195,7 +195,7 @@ const SPEC = {
     '/api/v1/payments/topups/initiate': {
       post: {
         tags: ['Payments'],
-        summary: 'Start a wallet top-up (ICICI Eazypay or PhonePe)',
+        summary: 'Start a wallet top-up (ICICI Orange PG or PhonePe)',
         responses: {
           200: {
             description:

@@ -19,6 +19,8 @@ import {
   type PublicBusCancellation,
 } from '@tripbng/shared';
 import { requirePermission } from '../middleware/rbac.js';
+import { requireNotFrozen } from '../middleware/cutover-freeze.js';
+import { bookingAgencyLimit } from '../middleware/agency-rate-limit.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { createBusBooking } from '../services/bus/booking.service.js';
@@ -36,6 +38,8 @@ export const busBookingsRouter: RouterT = Router();
 
 busBookingsRouter.post(
   '/',
+  requireNotFrozen('booking'),
+  bookingAgencyLimit,
   requirePermission('bus-booking:create'),
   validate(BusBookingRequestSchema),
   async (req, res, next) => {
@@ -184,6 +188,7 @@ busBookingsRouter.get(
  */
 busBookingsRouter.post(
   '/:id/cancel',
+  requireNotFrozen('booking'),
   requirePermission('bus-booking:cancel'),
   validate(BusCancellationRequestSchema),
   async (req, res, next) => {

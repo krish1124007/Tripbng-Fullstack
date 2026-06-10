@@ -8,10 +8,14 @@ import {
   ChevronsUpDown,
   Download,
   Filter as FilterIcon,
+  Bus as BusIcon,
+  Hotel as HotelIcon,
   Plane,
   PlaneTakeoff,
   Rows3,
   Search,
+  ShieldCheck as InsuranceIcon,
+  StickyNote as VisaIcon,
   Table as TableIcon,
 } from 'lucide-react';
 import type { PublicBooking } from '@tripbng/shared';
@@ -72,17 +76,51 @@ export default function BookingsPage() {
         header: 'Booking',
         cell: ({ row }) => {
           const b = row.original;
+          const productType =
+            (b as unknown as { productType?: string }).productType ?? 'FLIGHT';
+          const isHotel = productType === 'HOTEL' || b.flowSubType === ('HOTEL' as never);
+          const isHoliday =
+            productType === 'HOLIDAY' || b.flowSubType === ('HOLIDAY' as never);
+          const isVisa = productType === 'VISA' || b.flowSubType === ('VISA' as never);
+          const isBus = productType === 'BUS' || b.flowSubType === ('BUS' as never);
+          const isInsurance =
+            productType === 'INSURANCE' || b.flowSubType === ('INSURANCE' as never);
+          const Icon = isInsurance
+            ? InsuranceIcon
+            : isBus
+              ? BusIcon
+              : isVisa
+                ? VisaIcon
+                : isHotel || isHoliday
+                  ? HotelIcon
+                  : Plane;
+          // All product types now open /bookings/[id] — the detail page
+          // discriminates on productType and renders flight / hotel /
+          // holiday / visa / bus / insurance layouts accordingly.
+          const href = `/bookings/${b.id}`;
+          const isNonFlight = isHotel || isHoliday || isVisa || isBus || isInsurance;
+          const refLabel = isInsurance
+            ? 'Policy'
+            : isVisa
+              ? 'App'
+              : isBus
+                ? 'TIN'
+                : isNonFlight
+                  ? 'Conf'
+                  : 'PNR';
           return (
             <Link
-              href={`/bookings/${b.id}`}
+              href={href}
               className="group flex items-center gap-3 transition-colors hover:text-brand-700 dark:hover:text-brand-300"
             >
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-brand-50 text-brand-700 transition-colors group-hover:bg-brand-100 dark:bg-brand-500/15 dark:text-brand-300">
-                <Plane className="h-4 w-4" strokeWidth={1.75} />
+                <Icon className="h-4 w-4" strokeWidth={1.75} />
               </span>
               <div className="min-w-0">
                 <p className="font-mono text-xs font-bold text-ink-1">{b.bookingCode}</p>
-                <p className="font-mono text-[10px] text-ink-3">PNR {b.pnr ?? '—'}</p>
+                <p className="font-mono text-[10px] text-ink-3">
+                  {refLabel} {b.pnr ?? '—'}
+                </p>
               </div>
             </Link>
           );
@@ -212,8 +250,10 @@ export default function BookingsPage() {
         </Card>
       </section>
 
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-surface-1 p-2">
+      {/* Toolbar — stacks vertically on mobile so the search bar gets a full
+          row, then chips wrap below, then sort+density controls don't get
+          pushed off the right edge. */}
+      <div className="flex flex-col gap-2 rounded-lg border bg-surface-1 p-2 sm:flex-row sm:flex-wrap sm:items-center">
         <Input
           placeholder="Search code, PNR, sector…"
           value={q}
@@ -222,25 +262,29 @@ export default function BookingsPage() {
             setPage(1);
           }}
           leading={<Search className="h-4 w-4" strokeWidth={1.75} />}
-          className="h-8 w-full max-w-xs"
+          className="h-8 w-full sm:max-w-xs"
           fullWidth={false}
         />
 
-        <div className="mx-1 h-5 w-px bg-border" />
+        <div className="mx-1 hidden h-5 w-px bg-border sm:block" />
 
-        {STATUS_OPTIONS.map((s) => (
-          <FilterChip
-            key={s.value}
-            active={status === s.value}
-            onClick={() => {
-              setStatus(s.value);
-              setPage(1);
-            }}
-            label={s.label}
-          />
-        ))}
+        {/* Chips — horizontal scroll on small screens so the row doesn't blow
+            up the toolbar height with 6 filter chips wrapping. */}
+        <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
+          {STATUS_OPTIONS.map((s) => (
+            <FilterChip
+              key={s.value}
+              active={status === s.value}
+              onClick={() => {
+                setStatus(s.value);
+                setPage(1);
+              }}
+              label={s.label}
+            />
+          ))}
+        </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-2 sm:ml-auto">
           <Badge variant="outline" className="text-[10px]">
             <FilterIcon className="h-3 w-3" /> {totalBookings}
           </Badge>

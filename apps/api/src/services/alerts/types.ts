@@ -42,7 +42,23 @@ export type AlertEvent =
   | 'HOTEL_BOOKING_FAILED'
   | 'HOTEL_BOOKING_CANCELLED'
   // Ops-only
-  | 'CIRCUIT_BREAKER_TRIPPED';
+  | 'CIRCUIT_BREAKER_TRIPPED'
+  | 'MANUAL_ISSUANCE_PENDING_REMINDER'
+  | 'PARTNER_INQUIRY_RECEIVED'
+  | 'RECON_DISCREPANCY_FOUND'
+  // ── Agency-wallet additions (Phases 1-8 of AGENCY_WALLET_SYSTEM spec) ──
+  // Credit-due reminder anchors (spec §8)
+  | 'CREDIT_DUE_T_MINUS_3'
+  | 'CREDIT_DUE_T_MINUS_1'
+  | 'CREDIT_DUE_TODAY'
+  | 'CREDIT_OVERDUE'
+  // DI module — async incentive worker fires this post-credit
+  | 'INCENTIVE_CREDITED'
+  // Distributor → sub-agent balance landed (TRANSFER or RECALL completed)
+  | 'DISTRIBUTOR_TRANSFER_IN'
+  // Admin actions
+  | 'MODULE_SWITCHED'
+  | 'ADJUSTMENT_POSTED';
 
 export type AlertChannel = 'email' | 'whatsapp' | 'inapp';
 
@@ -50,6 +66,7 @@ export type AlertChannel = 'email' | 'whatsapp' | 'inapp';
  *  concrete email + mobile via the recipient resolver before queueing. */
 export type RecipientRef =
   | { kind: 'agency'; id: string | Types.ObjectId }
+  | { kind: 'distributor'; id: string | Types.ObjectId }
   | { kind: 'user'; id: string | Types.ObjectId }
   | { kind: 'booking_contact'; bookingId: string | Types.ObjectId }
   | { kind: 'ops' } // routes to env.OPS_ALERT_EMAIL
@@ -145,6 +162,151 @@ export interface BreakerVars {
   windowSec: number;
 }
 
+/** Reconciliation discrepancy — fired by the recon service when a gateway
+ *  settlement batch shows mismatches against our PaymentTransaction records.
+ *  Goes to OPS_ALERT_EMAIL only (finance shares the inbox until/unless a
+ *  separate FINANCE_ALERT_EMAIL env var is introduced). */
+export interface ReconDiscrepancyFoundVars {
+  batchId: string;
+  providerCode: string;
+  /** ISO yyyy-mm-dd — the settlement date the batch covers. */
+  batchDate: string;
+  discrepancyCount: number;
+  matchedCount: number;
+  resolvedCount: number;
+  /** Top 5 most-actionable discrepancies — rendered as a table. */
+  sampleDiscrepancies: Array<{
+    kind: string;
+    gatewayTxnId?: string | null;
+    paymentTxnCode?: string | null;
+    detail: string;
+    ourAmount?: number | null;
+    gatewayAmount?: number | null;
+  }>;
+  /** Deep-link to the admin reconciliation drill-down. */
+  adminUrl: string;
+}
+
+/** Partner inquiry — fired when a prospective agency or distributor submits
+ *  the public `/api/v1/inquiries` form. Goes to OPS_ALERT_EMAIL only. */
+export interface PartnerInquiryReceivedVars {
+  inquiryId: string;
+  type: 'AGENCY' | 'DISTRIBUTOR';
+  companyName: string;
+  fullName: string;
+  email: string;
+  mobile: string;
+  city: string;
+  state: string;
+  gstin: string;
+  sizeBand: string;
+  message: string;
+  /** Deep-link to /admin/inquiries/:id on the agency-portal — built at
+   *  enqueue time from req.protocol + req.get('host'). */
+  adminUrl: string;
+}
+
+// ── Ops vars ──
+
+/** Manual-issuance follow-up — fired by the cron worker when a booking has
+ *  been parked in PENDING_MANUAL longer than the tier threshold. Single
+ *  event, but `tier` lets the template ramp urgency (subject line + colour
+ *  + escalation copy) without proliferating events. */
+export interface ManualIssuancePendingVars {
+  bookingCode: string;
+  bookingId: string;
+  agencyName: string;
+  supplierCode: string;
+  sector: string;
+  /** ISO yyyy-mm-dd — travel date snapshot. */
+  travelDate: string;
+  paxCount: number;
+  /** Amount the agency was debited at confirm time, in paise. */
+  amountPaise: number;
+  /** ISO timestamp of when the booking entered PENDING_MANUAL. */
+  pendingSince: string;
+  /** Floored hours-since-pending — drives the subject + body urgency. */
+  pendingHours: number;
+  /** Escalation tier. Each is keyed to a min-hours threshold; once hit,
+   *  the booking fires once per tier (Redis dedupe), then escalates. */
+  tier: 'REMINDER' | 'ESCALATION' | 'CRITICAL' | 'CRITICAL_HIGH';
+  /** Snapshot of `booking.internalNotes` so ops sees the routing reason
+   *  (which Map Source matched, why the booking is here) in-line. */
+  internalNotes: string | null;
+  /** Deep-link to the admin booking-detail page so ops can issue the PNR
+   *  in one click. */
+  adminUrl: string;
+}
+
+// ── Agency-wallet vars ──
+
+/** Credit-due reminders — same shape for T-3 / T-1 / T+0 / T+3; the event
+ *  name disambiguates urgency at template-render time. */
+export interface CreditDueVars {
+  /** Outstanding credit balance in paise (creditUsed at the time of fire). */
+  creditUsedPaise: number;
+  creditLimitPaise: number;
+  /** ISO date of the due date, anchored to UTC midnight. */
+  dueDate: string;
+  /** Signed offset in days from now to due (negative = future, +3 = overdue). */
+  offsetDays: number;
+  /** Agency-dashboard URL where the user goes to pay down. */
+  payNowUrl: string;
+}
+
+/** Fired after the DI incentive worker commits the INCENTIVE_CREDIT (+
+ *  optional TDS_DEDUCT) ledger rows for a deposit. */
+export interface IncentiveCreditedVars {
+  /** Source deposit amount in paise. */
+  depositPaise: number;
+  /** Gross incentive (before TDS) in paise. */
+  incentivePaise: number;
+  /** TDS withheld in paise. Zero when tdsApplicable=false. */
+  tdsPaise: number;
+  /** Net wallet credit (= incentive − tds), in paise. */
+  netCreditPaise: number;
+  /** Wallet balance after the incentive applied, in paise. */
+  walletBalanceAfterPaise: number;
+}
+
+/** Fired on the receiving side of a distributor→sub-agent transfer (or its
+ *  reverse, when type=RECALL — the template differentiates via `type`). */
+export interface DistributorTransferInVars {
+  transferRef: string;
+  amountPaise: number;
+  /** Display name of the distributor sending (or recalling from) the balance. */
+  distributorName: string;
+  /** Direction signal — RECALL surfaces a different message than the normal
+   *  TRANSFER receipt. */
+  type: 'TRANSFER' | 'RECALL';
+  /** Wallet balance after the transfer landed, in paise. */
+  walletBalanceAfterPaise: number;
+}
+
+/** Admin switched the agency's module. Auditable + visible to the agency
+ *  owner so they understand any change in billing behaviour. */
+export interface ModuleSwitchedVars {
+  previousModule: 'CREDIT' | 'DI' | 'CASH' | 'DISTRIBUTOR' | 'SUB_AGENT';
+  newModule: 'CREDIT' | 'DI' | 'CASH' | 'DISTRIBUTOR' | 'SUB_AGENT';
+  /** Admin-supplied free-form context, if any. */
+  notes: string | null;
+  /** Whether the switch used the force=true override (CREDIT→other with
+   *  outstanding credit). Surfaces in the notification body. */
+  forced: boolean;
+}
+
+/** Manual wallet adjustment landed (either direct execute below threshold,
+ *  or via two-person approval above). */
+export interface AdjustmentPostedVars {
+  direction: 'CREDIT' | 'DEBIT';
+  amountPaise: number;
+  reason: string;
+  /** Wallet balance after the adjustment, in paise. */
+  walletBalanceAfterPaise: number;
+  /** True when the adjustment went through the two-person approval queue. */
+  wasApproved: boolean;
+}
+
 /** Hotel-booking lifecycle vars — shared base for CONFIRMED / FAILED /
  *  CANCELLED. The discriminated union below extends this with event-
  *  specific extras (refundPaise on CANCELLED, etc.). */
@@ -219,7 +381,28 @@ export type AlertPayload =
         cancellationFeePaise: number;
       };
     }
-  | { event: 'CIRCUIT_BREAKER_TRIPPED'; vars: BreakerVars };
+  | { event: 'CIRCUIT_BREAKER_TRIPPED'; vars: BreakerVars }
+  | { event: 'MANUAL_ISSUANCE_PENDING_REMINDER'; vars: ManualIssuancePendingVars }
+  | { event: 'PARTNER_INQUIRY_RECEIVED'; vars: PartnerInquiryReceivedVars }
+  | { event: 'RECON_DISCREPANCY_FOUND'; vars: ReconDiscrepancyFoundVars }
+  // Agency-wallet events
+  | { event: 'CREDIT_DUE_T_MINUS_3'; vars: CreditDueVars }
+  | { event: 'CREDIT_DUE_T_MINUS_1'; vars: CreditDueVars }
+  | { event: 'CREDIT_DUE_TODAY'; vars: CreditDueVars }
+  | { event: 'CREDIT_OVERDUE'; vars: CreditDueVars }
+  | { event: 'INCENTIVE_CREDITED'; vars: IncentiveCreditedVars }
+  | { event: 'DISTRIBUTOR_TRANSFER_IN'; vars: DistributorTransferInVars }
+  | { event: 'MODULE_SWITCHED'; vars: ModuleSwitchedVars }
+  | { event: 'ADJUSTMENT_POSTED'; vars: AdjustmentPostedVars };
+
+/** An email attachment passed through to nodemailer verbatim. Content is
+ *  a Buffer (not a Stream) so it's safely re-serializable inside the
+ *  BullMQ job if the dispatcher ever needs to retry. */
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
 
 /** Render output per channel — what the dispatcher hands to the channel
  *  adapter to deliver. Templates produce these from AlertPayload. */
@@ -227,6 +410,10 @@ export interface RenderedEmail {
   subject: string;
   html: string;
   text: string;
+  /** Optional file attachments. Produced either inline by `email()` (rare —
+   *  fast/cheap renders only) or by the async `emailAttachments` hook below,
+   *  which the dispatcher calls and merges in before sending. */
+  attachments?: EmailAttachment[];
 }
 
 export interface RenderedWhatsApp {
@@ -245,9 +432,26 @@ export interface RenderedInApp {
 }
 
 /** A template module exports this shape. Channels marked optional mean the
- *  alert isn't supported on that channel (e.g. WhatsApp for ops alerts). */
+ *  alert isn't supported on that channel (e.g. WhatsApp for ops alerts).
+ *
+ *  The optional `branding` arg on `email` lets per-tenant transactional
+ *  emails carry the agent / distributor's logo + primaryColor in the
+ *  header band. Templates that ignore the second arg fall through to
+ *  the platform default chrome — perfectly valid for internal alerts
+ *  (low-wallet-balance, ops queue events, etc.).
+ */
 export interface AlertTemplate {
-  email?: (vars: AlertPayload) => RenderedEmail;
+  email?: (
+    vars: AlertPayload,
+    branding?: import('@tripbng/shared').ResolvedBranding | null,
+  ) => RenderedEmail;
+  /** Async attachment producer — runs after `email()` and merges the result
+   *  into RenderedEmail.attachments. Use for templates that need to fetch
+   *  the source record (e.g. Booking → e-ticket PDF) which would be
+   *  inappropriate to do in the sync `email()` renderer. Failure is
+   *  non-fatal: the dispatcher sends the email without attachments and
+   *  logs a warn so ops sees the degradation. */
+  emailAttachments?: (vars: AlertPayload) => Promise<EmailAttachment[]>;
   whatsapp?: (vars: AlertPayload) => RenderedWhatsApp;
   inapp?: (vars: AlertPayload) => RenderedInApp;
 }

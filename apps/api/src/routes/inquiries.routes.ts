@@ -18,9 +18,8 @@ import { loginLimiter } from '../middleware/rateLimit.js';
 import { validate } from '../utils/validate.js';
 import { ok } from '../utils/response.js';
 import { PartnerInquiry } from '../models/PartnerInquiry.js';
-import { env } from '../config/env.js';
-import { getSmtpTransport } from '../config/smtp.js';
 import { logger } from '../config/logger.js';
+import { enqueueAlert } from '../services/alerts/index.js';
 
 export const inquiriesRouter: RouterT = Router();
 
@@ -195,55 +194,47 @@ inquiriesRouter.patch(
 );
 
 // ────────── Email notification ──────────
+//
+// Goes through the shared alert system → `{ kind: 'ops' }` recipient resolves
+// to OPS_ALERT_EMAIL. The dispatcher handles SMTP failure + retry with BullMQ.
+// Tenant is set to 'system' since partner inquiries are pre-tenant (no agency
+// exists yet) — the recipient resolver tolerates this for ops-only events.
 
 async function notifyOps(
   doc: ReturnType<InstanceType<typeof PartnerInquiry>['toObject']>,
   appOrigin: string,
 ): Promise<void> {
-  const opsTo = env.OPS_ALERT_EMAIL;
-  if (!opsTo) {
-    logger.info(
-      { inquiryId: String(doc._id) },
-      'inquiry: OPS_ALERT_EMAIL not set, skipping email notification',
-    );
-    return;
-  }
-  const transport = getSmtpTransport();
-  if (!transport) {
-    logger.info(
-      { inquiryId: String(doc._id), opsTo },
-      'inquiry: SMTP not configured, skipping email notification',
-    );
-    return;
-  }
-
-  const subject = `[TripBng inquiry] ${doc.type} · ${doc.companyName}`;
-  const text =
-    `New partner inquiry filed at ${appOrigin}/apply\n\n` +
-    `Type: ${doc.type}\n` +
-    `Company: ${doc.companyName}\n` +
-    `Contact: ${doc.fullName} <${doc.email}> · ${doc.mobile}\n` +
-    `City: ${doc.city || '—'} · State: ${doc.state || '—'}\n` +
-    `GSTIN: ${doc.gstin || '—'} · Size band: ${doc.sizeBand || '—'}\n\n` +
-    `Message:\n${doc.message || '(none)'}\n\n` +
-    `Open in admin: ${appOrigin}/admin/inquiries/${String(doc._id)}\n`;
-
   try {
-    await transport.sendMail({
-      from: env.SMTP_FROM,
-      to: opsTo,
-      replyTo: doc.email,
-      subject,
-      text,
-    });
-    logger.info(
-      { inquiryId: String(doc._id), opsTo },
-      'inquiry: ops notification sent',
+    await enqueueAlert(
+      {
+        event: 'PARTNER_INQUIRY_RECEIVED',
+        vars: {
+          inquiryId: String(doc._id),
+          type: doc.type as 'AGENCY' | 'DISTRIBUTOR',
+          companyName: doc.companyName,
+          fullName: doc.fullName,
+          email: doc.email,
+          mobile: doc.mobile,
+          city: doc.city || '',
+          state: doc.state || '',
+          gstin: doc.gstin || '',
+          sizeBand: doc.sizeBand || '',
+          message: doc.message || '',
+          adminUrl: `${appOrigin}/admin/inquiries/${String(doc._id)}`,
+        },
+      },
+      [{ kind: 'ops' }],
+      {
+        tenantId: 'system',
+        correlationKey: `inquiry:${String(doc._id)}`,
+      },
     );
   } catch (err) {
-    logger.error(
+    // Best-effort — alert pipeline has its own retry policy; this catch is
+    // just a guard so a Redis blip can't crash the inquiry POST handler.
+    logger.warn(
       { err, inquiryId: String(doc._id) },
-      'inquiry: ops notification failed',
+      'inquiry: enqueueAlert failed (continuing — inquiry already persisted)',
     );
   }
 }

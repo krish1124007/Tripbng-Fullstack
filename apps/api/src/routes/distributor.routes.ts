@@ -7,6 +7,7 @@ import {
   UpdateDistributorRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -18,6 +19,7 @@ import {
   updateDistributor,
 } from '../services/distributor.service.js';
 import { serializeAgency } from '../services/agency.service.js';
+import { readAgencyBalances } from '../services/wallet/balance-reader.js';
 import {
   AgencyRegistration,
 } from '../models/AgencyRegistration.js';
@@ -138,7 +140,15 @@ distributorRouter.get('/me/referred-agents', async (req, res, next) => {
       .limit(100)
       .select('agencyCode companyName city state status createdAt walletBalance')
       .lean();
-    return ok(res, { registrations, agencies: liveAgencies });
+    // Resolve wallet balances from the canonical Wallet collection (Phase-15
+    // cutover). The Agency.walletBalance field on the lean doc is the legacy
+    // fallback for any stragglers without a Wallet row yet.
+    const balances = await readAgencyBalances(liveAgencies.map((a) => a._id));
+    const agenciesWithBalances = liveAgencies.map((a) => ({
+      ...a,
+      walletBalance: balances.get(String(a._id)) ?? a.walletBalance,
+    }));
+    return ok(res, { registrations, agencies: agenciesWithBalances });
   } catch (err) {
     next(err);
   }
@@ -154,8 +164,9 @@ distributorRouter.get(
         typeof PaginationQuerySchema.parse
       >;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
-      if (q) {
-        filter.$or = [{ companyName: new RegExp(q, 'i') }, { distributorCode: new RegExp(q, 'i') }];
+      {
+        const re = containsRegex(q);
+        if (re) filter.$or = [{ companyName: re }, { distributorCode: re }];
       }
       const [items, total] = await Promise.all([
         Distributor.find(filter)
@@ -200,7 +211,13 @@ distributorRouter.get('/:id/downline', async (req, res, next) => {
       tenantId: req.auth!.tenantId,
       distributorId: req.params.id,
     }).sort({ createdAt: -1 });
-    return ok(res, agencies.map(serializeAgency));
+    const balances = await readAgencyBalances(agencies.map((a) => a._id));
+    return ok(
+      res,
+      agencies.map((a) =>
+        serializeAgency(a, { walletBalanceOverride: balances.get(String(a._id)) }),
+      ),
+    );
   } catch (err) {
     next(err);
   }

@@ -198,6 +198,16 @@ Since this is a Turborepo-managed workspace, we can build everything using singl
     pnpm run seed
     ```
 
+4.  **Enrol 2FA for the Super Admin (required in production)**:
+    The `000000` dev TOTP bypass is disabled when `NODE_ENV=production`, and the
+    SUPER_ADMIN account can't sign in until 2FA is enrolled. Run this once
+    after seeding to generate a TOTP secret and print a QR code:
+    ```bash
+    pnpm --filter @tripbng/api enrol:2fa admin@tripbng.dev
+    ```
+    Scan the QR with Google Authenticator / Authy (or enter the printed
+    secret manually), then log in with the 6-digit code from the app.
+
 ---
 
 ## 🔄 Step 7: Launch the App using PM2

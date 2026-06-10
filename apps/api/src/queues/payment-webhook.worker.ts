@@ -108,7 +108,46 @@ export async function paymentWebhookProcessor(job: Job<PaymentWebhookJobData>): 
       }
 
       const eventType = verified.eventType.toUpperCase();
-      if (eventType.includes('SUCCESS') || eventType.includes('COMPLETED')) {
+      // Refund event routing comes BEFORE the generic SUCCESS/FAILED branches
+      // because PhonePe's refund event names contain "COMPLETED" / "FAILED"
+      // (e.g. `pg.refund.completed`) — without the refund check first, those
+      // would be misrouted into markSuccess / markFailed and corrupt the PT
+      // state machine.
+      const isRefundEvent = eventType.includes('REFUND');
+      if (isRefundEvent) {
+        // Pull the refund-side gateway id (PhonePe puts it at payload.refundId).
+        // Falls back to the parent merchantOrderId when the gateway response
+        // doesn't carry a distinct id.
+        const refundPayload = (verified.parsed['payload'] ?? {}) as {
+          refundId?: string;
+          merchantRefundId?: string;
+          state?: string;
+        };
+        const gatewayRefundId = refundPayload.refundId ?? refundPayload.merchantRefundId;
+
+        if (eventType.includes('COMPLETED') || eventType.includes('SUCCESS')) {
+          await paymentService.markRefunded(pt._id, {
+            gatewayRefundId,
+            gatewayResponsePayload: verified.parsed,
+            webhookPayloadId: new Types.ObjectId(webhookEventId),
+          });
+        } else if (eventType.includes('FAILED')) {
+          await paymentService.markRefundFailed(pt._id, {
+            failureCode: eventType,
+            failureReason: 'gateway reported refund failure',
+            gatewayResponsePayload: verified.parsed,
+          });
+        } else {
+          // Accepted / pending — gateway has queued the refund but not yet
+          // settled. Flip the PT to REFUND_INITIATED so the UI shows the
+          // intermediate state; the wallet stays untouched until completion.
+          await paymentService.markRefundInitiated(pt._id, {
+            gatewayRefundId,
+            gatewayResponsePayload: verified.parsed,
+            reason: 'gateway accepted refund',
+          });
+        }
+      } else if (eventType.includes('SUCCESS') || eventType.includes('COMPLETED')) {
         await paymentService.markSuccess(pt._id, {
           verificationMethod: 'WEBHOOK',
           webhookPayloadId: new Types.ObjectId(webhookEventId),

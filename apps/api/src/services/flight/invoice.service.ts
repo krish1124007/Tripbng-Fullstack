@@ -25,6 +25,7 @@ import { recordAudit } from '../audit.service.js';
 import { Booking, type BookingDoc } from '../../models/Booking.js';
 import { FlightInvoice, type FlightInvoiceDoc } from '../../models/FlightInvoice.js';
 import { Agency } from '../../models/Agency.js';
+import { gstinStateName } from '../../utils/gstin-state.js';
 
 // ────────── Pure GST math (same as bus) ──────────
 
@@ -236,9 +237,13 @@ export async function generateInvoiceForFlightBooking(
         gstin: booking.gst.number,
         pan: '',
         address: booking.gst.address,
-        // We don't capture the customer's full state name on the form
-        // — pull it from agency record or leave blank for v1.
-        state: agency?.companyName ? '' : '',
+        // billTo.state resolution order: derive from the GSTIN state-code
+        // (authoritative for GST — the same field gives us billToStateCode
+        // for intra/inter-state split below), fall back to the booking
+        // agency's registered state. Leaving this blank caused downstream
+        // GST audit failures; the earlier `agency?.companyName ? '' : ''`
+        // expression was always producing an empty string.
+        state: gstinStateName(billToStateCode) ?? agency?.state ?? '',
         stateCode: billToStateCode,
         email: booking.contact?.email ?? '',
       },

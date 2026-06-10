@@ -601,11 +601,12 @@ function FarePickerSection({
 
       {/* Fare grid — auto-fit so 2 fares show side-by-side on wide
           cards, 3 fares show three-up, and on narrow viewports they
-          stack vertically. minmax(260px, 1fr) keeps each card readable
-          without forcing horizontal scroll. */}
+          stack vertically. minmax(160px,1fr) keeps the cards from
+          forcing horizontal scroll inside the result card on small
+          phones (375px viewport ≈ 330px effective card width). */}
       <div
         className="grid gap-2.5"
-        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
       >
         {visibleFares.map(({ fare: f, index: i }) => (
           <FareOptionRow

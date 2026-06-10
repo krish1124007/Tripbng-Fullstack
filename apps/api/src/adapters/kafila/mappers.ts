@@ -171,6 +171,10 @@ export function fromKafilaItinerary(
     segments,
     travelClass,
     fareClass: itin.airSegments[0]?.fareBasis,
+    // `fareType` lives on the air segment, not the itinerary header.
+    // Empty / null falls through to undefined so the downstream Map Source
+    // + Map Policy code falls back to fareClass.
+    fareType: itin.airSegments[0]?.fareType ?? undefined,
     perPax,
     refundable: itin.refundable,
     fareRuleDescription: undefined,

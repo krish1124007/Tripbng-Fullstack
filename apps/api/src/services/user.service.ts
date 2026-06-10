@@ -19,6 +19,24 @@ export async function createUser(
   input: CreateUserRequest,
   createdBy?: string,
 ): Promise<UserDoc> {
+  // Role-context guard: agency/sub-agent users MUST be linked to an Agency,
+  // distributors MUST be linked to a Distributor. Without this every booking
+  // attempt later 400s with "Bookings require an agency wallet context" and
+  // the operator has no idea why — the user looks like an agency in the UI
+  // (correct userCode prefix, correct role) but the wallet-bearing link
+  // is null. Caught here so it's caught at create-time, not 3 weeks later
+  // when someone tries to ticket their first booking.
+  if ((input.role === 'AGENCY' || input.role === 'SUB_AGENT') && !input.agencyId) {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: `role=${input.role} users must be linked to an agency — set agencyId`,
+    });
+  }
+  if (input.role === 'DISTRIBUTOR' && !input.distributorId) {
+    throw new AppError('VALIDATION_ERROR', {
+      reason: 'role=DISTRIBUTOR users must be linked to a distributor — set distributorId',
+    });
+  }
+
   const existing = await User.findOne({
     tenantId,
     $or: [{ email: input.email }, { mobile: input.mobile }],

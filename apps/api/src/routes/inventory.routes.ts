@@ -11,6 +11,7 @@ import {
   UpdateInventoryRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
+import { containsRegex, prefixRegex } from '../utils/regex.js';
 import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -65,13 +66,17 @@ inventoryRouter.get(
         endDate,
       } = req.query as unknown as ReturnType<typeof InventoryListQuerySchema.parse>;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
-      if (q) {
-        filter.$or = [
-          { inventoryName: new RegExp(q, 'i') },
-          { inventoryCode: new RegExp(q, 'i') },
-          { 'origin.code': new RegExp(`^${q.toUpperCase()}`) },
-          { 'destination.code': new RegExp(`^${q.toUpperCase()}`) },
-        ];
+      {
+        const re = containsRegex(q);
+        const codeRe = prefixRegex(q ? q.toUpperCase() : null);
+        if (re && codeRe) {
+          filter.$or = [
+            { inventoryName: re },
+            { inventoryCode: re },
+            { 'origin.code': codeRe },
+            { 'destination.code': codeRe },
+          ];
+        }
       }
       if (inventoryName) filter.inventoryName = new RegExp(inventoryName, 'i');
       if (inventoryCode) filter.inventoryCode = new RegExp(inventoryCode, 'i');
