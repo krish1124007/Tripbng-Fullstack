@@ -8,7 +8,8 @@ export type PaymentProviderCode =
   | 'ORANGE_PG'
   | 'PHONEPE'
   | 'RAZORPAY'
-  | 'MANUAL';
+  | 'MANUAL'
+  | 'ICICI_ORANGE_PG';
 
 export type PaymentCapability =
   | 'WALLET_TOPUP'

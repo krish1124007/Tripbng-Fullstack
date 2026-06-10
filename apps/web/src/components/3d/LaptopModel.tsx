@@ -1,8 +1,8 @@
 'use client';
 
 import { useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
-import { useGLTF, Html, ContactShadows, PresentationControls, Environment } from '@react-three/drei';
+
+import { Html, ContactShadows, PresentationControls, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { FauxDashboard } from '@/app/(marketing)/_components/faux-dashboard';
 
@@ -31,8 +31,8 @@ export function LaptopModel(props: any) {
       </mesh>
 
       {/* Screen Hinge */}
-      <mesh position={[0, 0, -0.95]}>
-        <cylinderGeometry args={[0.05, 0.05, 2.9, 32]} rotation={[0, 0, Math.PI / 2]} />
+      <mesh position={[0, 0, -0.95]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[0.05, 0.05, 2.9, 32]} />
         <meshStandardMaterial color="#111" />
       </mesh>
 

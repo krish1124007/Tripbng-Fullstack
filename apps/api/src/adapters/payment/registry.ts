@@ -14,11 +14,8 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { getActiveConfig } from '../../services/payment/payment-config.service.js';
-import {
-  IciciEazypayProvider,
-  type IciciEazypayConfig,
-  type IciciEazypayCredentials,
-} from './icici-eazypay.provider.js';
+import { IciciOrangePgProvider } from './icici-orange-pg/provider.js';
+import type { IciciOrangePgConfig, IciciOrangePgCredentials } from './icici-orange-pg/types.js';
 import {
   OrangePgProvider,
   type OrangePgConfig,
@@ -219,7 +216,7 @@ function buildProviderFromEnv(
     const returnUrl = process.env.ORANGE_PG_RETURN_URL;
     const baseUrl =
       process.env.ORANGE_PG_BASE_URL ??
-      (env === 'PROD'
+      (_envName === 'PROD'
         ? 'https://pgpay.icicibank.com/pg/api/v2/initiateSale'
         : 'https://pgpayuat.icicibank.com/tsp/pg/api/v2/initiateSale');
     if (!merchantId || !secretKey || !returnUrl) return null;

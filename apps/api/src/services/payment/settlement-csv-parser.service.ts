@@ -32,7 +32,7 @@ export interface ParseResult {
 /** Per-provider column map. Keys are our GatewayRow fields; values are
  *  the candidate header names we'll accept (lowercased). The first match
  *  wins, so list specific names first. */
-const COLUMN_MAPS: Record<PaymentProviderCode, Record<keyof GatewayRow, string[]>> = {
+const COLUMN_MAPS: Partial<Record<PaymentProviderCode, Record<keyof GatewayRow, string[]>>> = {
   ICICI_ORANGE_PG: {
     // ICICI's settlement file (`ICICI_Orange_PG_Settlement_YYYYMMDD.csv`):
     //   Date | MerchantTxnNo | RRN | TxnAmount | TxnStatus | MDR | GST | UTR
@@ -137,6 +137,10 @@ export function parseSettlementCsv(
   result.detectedHeaders = headerCells;
 
   const map = COLUMN_MAPS[providerCode];
+  if (!map) {
+    result.errors.push({ line: 1, reason: `unsupported provider for reconciliation: ${providerCode}` });
+    return result;
+  }
   // Resolve each field's column index, or null if it's missing.
   const idx: Partial<Record<keyof GatewayRow, number>> = {};
   for (const field of Object.keys(map) as Array<keyof GatewayRow>) {

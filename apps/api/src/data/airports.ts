@@ -106,3 +106,17 @@ export function searchAirports(q: string, limit = 10): Airport[] {
   }
   return [...exactCode, ...priorityStartsWith, ...startsWith, ...contains].slice(0, limit);
 }
+
+const IATA_TO_COUNTRY: Map<string, string> = new Map(
+  GENERATED.map((a) => [a.iata.toUpperCase(), a.countryCode.toUpperCase()]),
+);
+
+export function deriveTravelType(
+  originIata: string,
+  destinationIata: string,
+): 'DOMESTIC' | 'INTERNATIONAL' {
+  const o = IATA_TO_COUNTRY.get(originIata.toUpperCase());
+  const d = IATA_TO_COUNTRY.get(destinationIata.toUpperCase());
+  if (!o || !d) return 'DOMESTIC';
+  return o === 'IN' && d === 'IN' ? 'DOMESTIC' : 'INTERNATIONAL';
+}

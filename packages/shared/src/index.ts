@@ -5,3 +5,4 @@ export * from './codes.js';
 export * from './condition-tree.js';
 export * from './schemas/index.js';
 export * from './data/airlines.js';
+export * as Money from './money/index.js';

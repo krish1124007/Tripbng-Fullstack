@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, Clock, Plane, Receipt, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, Clock, Plane, Receipt, ShieldCheck, X, Bus as BusIcon, Building2 as HotelIcon, FileText as VisaIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PublicBooking } from '@tripbng/shared';
 import {

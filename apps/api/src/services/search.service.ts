@@ -1,3 +1,7 @@
+import { applyMapSourceFilter } from './search/map-source-filter.service.js';
+import { resolveMapPolicy, applyMapPolicyToBreakdown, logMapPolicyApplied } from './pricing/map-policy-pricing.service.js';
+import { resolveSupplierCommissionPaise } from './pricing/map-policy-pricing.service.js';
+import { deriveTravelType } from '../data/airports.js';
 import crypto from 'node:crypto';
 import {
   type FareBreakdown,
@@ -319,6 +323,7 @@ export async function searchFlights(
   }
 
   const bookingDate = new Date();
+  const commissionPctCache = new Map<string, number>();
   const priced: SearchResult[] = [];
   for (const opt of fanout.options) {
     // Airline restriction (Module 3, rule 3) — a matched mapping/source may
