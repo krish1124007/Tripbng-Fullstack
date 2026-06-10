@@ -3,7 +3,7 @@ import { z } from 'zod';
 // Payment + wallet Zod contracts. Single source of truth for API + Web.
 
 
-export const PAYMENT_PROVIDER = ['ICICI_EAZYPAY', 'ORANGE_PG', 'PHONEPE', 'MANUAL'] as const;
+
 
 export const PAYMENT_PROVIDER = ['ICICI_ORANGE_PG', 'PHONEPE', 'MANUAL'] as const;
 
