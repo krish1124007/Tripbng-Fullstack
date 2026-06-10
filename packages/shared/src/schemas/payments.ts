@@ -37,17 +37,12 @@ export const PAYMENT_INSTRUMENT = [
 ] as const;
 
 export const TOPUP_METHOD = [
-
-  'ICICI_EAZYPAY',
-  'ORANGE_PG',
-
   'ICICI_ORANGE_PG',
-
   'PHONEPE',
   'MANUAL_NEFT',
   'MANUAL_UPI',
   'MANUAL_CASH',
-] as const;
+]  as const;
 export type TopupMethod = (typeof TOPUP_METHOD)[number];
 
 // ────────── Request shapes ──────────
@@ -62,7 +57,7 @@ const amountPaise = z
 export const GatewayInitiateTopupRequestSchema = z.object({
   amount: amountPaise,
 
-  providerCode: z.enum(['ICICI_EAZYPAY', 'ORANGE_PG', 'PHONEPE']),
+
 
   providerCode: z.enum(['ICICI_ORANGE_PG', 'PHONEPE']),
 
