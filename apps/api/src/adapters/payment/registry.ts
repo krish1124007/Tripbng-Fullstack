@@ -18,6 +18,11 @@ import {
   type IciciEazypayConfig,
   type IciciEazypayCredentials,
 } from './icici-eazypay.provider.js';
+import {
+  OrangePgProvider,
+  type OrangePgConfig,
+  type OrangePgCredentials,
+} from './orange-pg.provider.js';
 import { ManualProvider } from './manual.provider.js';
 import { PhonePeProvider, type PhonePeConfig, type PhonePeCredentials } from './phonepe.provider.js';
 import {
@@ -136,6 +141,20 @@ function buildProvider(raw: BuildInput): PaymentProvider {
     };
     return new IciciEazypayProvider(cfg);
   }
+  if (raw.providerCode === 'ORANGE_PG') {
+    const creds = raw.credentials as Partial<OrangePgCredentials>;
+    if (!creds.merchantId || !creds.secretKey) {
+      throw new PaymentError('NOT_CONFIGURED', 'Orange PG credentials incomplete', 'ORANGE_PG');
+    }
+    const cfg: OrangePgConfig = {
+      credentials: creds as OrangePgCredentials,
+      baseUrl: raw.baseUrl,
+      commandUrl: (raw.credentials['commandUrl'] as string | undefined) ?? undefined,
+      returnUrl: raw.returnUrl ?? '',
+      timeoutMs,
+    };
+    return new OrangePgProvider(cfg);
+  }
   if (raw.providerCode === 'PHONEPE') {
     const creds = raw.credentials as Partial<PhonePeCredentials>;
     if (!creds.merchantId || !creds.clientId || !creds.clientSecret || !creds.clientVersion) {
@@ -184,6 +203,24 @@ function buildProviderFromEnv(
     return new IciciEazypayProvider({
       credentials: { merchantId, subMerchantId, encryptionKey, payMode },
       baseUrl,
+      returnUrl,
+      timeoutMs: 30_000,
+    });
+  }
+  if (code === 'ORANGE_PG') {
+    const merchantId = process.env.ORANGE_PG_MERCHANT_ID;
+    const secretKey = process.env.ORANGE_PG_SECRET_KEY;
+    const returnUrl = process.env.ORANGE_PG_RETURN_URL;
+    const baseUrl =
+      process.env.ORANGE_PG_BASE_URL ??
+      (env === 'PROD'
+        ? 'https://pgpay.icicibank.com/pg/api/v2/initiateSale'
+        : 'https://pgpayuat.icicibank.com/tsp/pg/api/v2/initiateSale');
+    if (!merchantId || !secretKey || !returnUrl) return null;
+    return new OrangePgProvider({
+      credentials: { merchantId, secretKey },
+      baseUrl,
+      commandUrl: process.env.ORANGE_PG_COMMAND_URL,
       returnUrl,
       timeoutMs: 30_000,
     });

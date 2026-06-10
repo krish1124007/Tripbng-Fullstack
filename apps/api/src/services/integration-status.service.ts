@@ -25,6 +25,7 @@ import {
   getTboFlightAdapterIfConfigured,
 } from '../adapters/registry.js';
 import { refreshOverrideCache } from '../adapters/integration-override-cache.js';
+import { invalidateSearchCache } from './search-cache.js';
 
 // ────────── Catalog ──────────
 
@@ -348,7 +349,7 @@ export async function getIntegrationStatuses(opts: {
     const ovr = overrideByCode.get(entry.code);
     const overrideDisabled = Boolean(ovr?.disabled);
 
-    let effective: 'ON' | 'OFF' = envEnabled && !overrideDisabled ? 'ON' : 'OFF';
+    const effective: 'ON' | 'OFF' = envEnabled && !overrideDisabled ? 'ON' : 'OFF';
     let offReason: string | undefined;
     if (effective === 'OFF') {
       if (!envEnabled) offReason = 'Env flag is off';
@@ -431,4 +432,11 @@ export async function setIntegrationOverride(args: {
   // Refresh the in-memory cache immediately so the change takes effect
   // in this process without waiting for the next 30s tick.
   await refreshOverrideCache();
+
+  // Drop cached search responses so the next search re-runs the fan-out with
+  // the new supplier set. Without this, a search performed while the supplier
+  // was OFF keeps being replayed for up to the cache TTL after it's turned back
+  // ON — which presents as "re-enabling the supplier showed no new flights".
+  // Toggles are global (cross-tenant), so flush every tenant's search cache.
+  await invalidateSearchCache();
 }

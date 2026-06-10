@@ -1,9 +1,13 @@
 import { Router, type Router as RouterT } from 'express';
 import { Types } from 'mongoose';
+import { z } from 'zod';
 import {
   AppError,
   CreateMarkupRuleRequestSchema,
+  MARKUP_STATUS,
   PaginationQuerySchema,
+  PAX_TYPE,
+  TRAVEL_TYPE,
   UpdateMarkupRuleRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
@@ -49,17 +53,31 @@ function scopeFilter(auth: AuthContext) {
   return filter;
 }
 
+// Agency Markup list query — pagination + the reference search filters
+// (Description, Airline, Travel Type, Pax Type, Status).
+const MarkupListQuerySchema = PaginationQuerySchema.extend({
+  airline: z.string().trim().toUpperCase().min(2).max(3).optional(),
+  travelType: z.enum(TRAVEL_TYPE).optional(),
+  paxType: z.enum(PAX_TYPE).optional(),
+  status: z.enum(MARKUP_STATUS).optional(),
+});
+
 markupRuleRouter.get(
   '/',
   requirePermission('markup-rule:read'),
-  validate(PaginationQuerySchema, 'query'),
+  validate(MarkupListQuerySchema, 'query'),
   async (req, res, next) => {
     try {
-      const { page, limit, q } = req.query as unknown as ReturnType<
-        typeof PaginationQuerySchema.parse
+      const { page, limit, q, airline, travelType, paxType, status } = req.query as unknown as ReturnType<
+        typeof MarkupListQuerySchema.parse
       >;
       const filter: Record<string, unknown> = scopeFilter(req.auth!);
       if (q) filter.name = new RegExp(q, 'i');
+      // conditions.airlines / conditions.paxTypes are arrays — equality matches membership.
+      if (airline) filter['conditions.airlines'] = airline;
+      if (travelType) filter['conditions.travelType'] = travelType;
+      if (paxType) filter['conditions.paxTypes'] = paxType;
+      if (status) filter.status = status;
       const [items, total] = await Promise.all([
         MarkupRule.find(filter)
           .sort({ priority: 1, createdAt: -1 })
@@ -153,6 +171,49 @@ markupRuleRouter.patch(
         after: { value: updated.value, status: updated.status },
       });
       return ok(res, serialize(updated));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// Clone — duplicate a rule (reference "Clone" action). The copy is created
+// PAUSED with a "(copy)" suffix so it never silently changes live pricing.
+markupRuleRouter.post(
+  '/:id/clone',
+  requirePermission('markup-rule:create'),
+  async (req, res, next) => {
+    try {
+      if (!Types.ObjectId.isValid(req.params.id)) throw new AppError('NOT_FOUND');
+      const filter = scopeFilter(req.auth!);
+      filter._id = req.params.id;
+      const src = await MarkupRule.findOne(filter).lean();
+      if (!src) throw new AppError('NOT_FOUND');
+
+      const {
+        _id: _omitId,
+        createdAt: _omitCreated,
+        updatedAt: _omitUpdated,
+        createdBy: _omitBy,
+        updatedBy: _omitUpdBy,
+        ...rest
+      } = src as Record<string, unknown>;
+      const clone = await MarkupRule.create({
+        ...rest,
+        name: `${src.name} (copy)`,
+        status: 'PAUSED',
+        createdBy: req.auth!.userId,
+      });
+      await recordAudit({
+        tenantId: req.auth!.tenantId,
+        actorId: req.auth!.userId,
+        actorRole: req.auth!.role,
+        action: 'markup-rule.clone',
+        resource: 'markup-rule',
+        resourceId: String(clone._id),
+        after: { name: clone.name, clonedFrom: req.params.id },
+      });
+      return created(res, serialize(clone));
     } catch (err) {
       next(err);
     }

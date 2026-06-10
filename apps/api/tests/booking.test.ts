@@ -88,11 +88,14 @@ async function reset(): Promise<void> {
     tenantId,
     name: 'Standard',
     cancellationBands: [
-      { hoursBeforeFrom: 72, hoursBeforeTo: null, feeType: 'PERCENT', feeValue: 1500 }, // 15%
-      { hoursBeforeFrom: 0, hoursBeforeTo: 72, feeType: 'NON_REFUNDABLE', feeValue: 0 },
+      // >72h before departure → 15% cancellation fee.
+      { fromHours: 72, toHours: null, percentage: 15, penaltyAmountPaise: 0, additionalFeePaise: 0 },
+      // <72h → non-refundable (100% fee).
+      { fromHours: 0, toHours: 72, percentage: 100, penaltyAmountPaise: 0, additionalFeePaise: 0 },
     ],
     reschedulingBands: [],
-    noShowFeePaise: 0,
+    noShowPenaltyPaise: 0,
+    noShowAdditionalFeePaise: 0,
   });
   fareRuleId = String(fareRule._id);
 

@@ -1,6 +1,8 @@
 import { Router, type Router as RouterT } from 'express';
 import { Types } from 'mongoose';
+import { z } from 'zod';
 import {
+  AGENCY_GROUP_STATUS,
   AppError,
   CreateAgencyGroupRequestSchema,
   PaginationQuerySchema,
@@ -11,6 +13,7 @@ import { ok, created } from '../utils/response.js';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { AgencyGroup } from '../models/AgencyGroup.js';
+import { Agency } from '../models/Agency.js';
 import { recordAudit } from '../services/audit.service.js';
 
 export const agencyGroupRouter: RouterT = Router();
@@ -24,25 +27,52 @@ function serialize(g: InstanceType<typeof AgencyGroup>) {
     description: g.description,
     agencyIds: (g.agencyIds ?? []).map(String),
     agencyCount: g.agencyIds?.length ?? 0,
+    airlineCodes: g.airlineCodes ?? [],
+    airlineCount: g.airlineCodes?.length ?? 0,
+    status: g.status ?? 'ACTIVE',
     createdAt: g.createdAt.toISOString(),
     updatedAt: g.updatedAt.toISOString(),
   };
 }
 
+const AgencyGroupListQuerySchema = PaginationQuerySchema.extend({
+  agencyId: z.string().trim().optional(),
+  agencyName: z.string().trim().optional(),
+  status: z.enum(AGENCY_GROUP_STATUS).optional(),
+});
+
 agencyGroupRouter.get(
   '/',
   requirePermission('agency-group:read'),
-  validate(PaginationQuerySchema, 'query'),
+  validate(AgencyGroupListQuerySchema, 'query'),
   async (req, res, next) => {
     try {
-      const { page, limit, q } = req.query as unknown as ReturnType<
-        typeof PaginationQuerySchema.parse
+      const { page, limit, q, agencyId, agencyName, status } = req.query as unknown as ReturnType<
+        typeof AgencyGroupListQuerySchema.parse
       >;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
       if (req.auth!.role === 'DISTRIBUTOR') {
         filter.distributorId = req.auth!.distributorId;
       }
       if (q) filter.name = new RegExp(q, 'i');
+      if (status) filter.status = status;
+
+      // "Agency id" / "Agency name" filter the groups DOWN to those that contain
+      // a matching sub-agency. Resolve the agencies first, then match groups whose
+      // agencyIds intersect. An ObjectId in agencyId matches directly.
+      if (agencyId || agencyName) {
+        const agencyFilter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
+        const or: Record<string, unknown>[] = [];
+        if (agencyId) {
+          if (Types.ObjectId.isValid(agencyId)) or.push({ _id: agencyId });
+          or.push({ agencyCode: new RegExp(agencyId, 'i') });
+        }
+        if (agencyName) or.push({ companyName: new RegExp(agencyName, 'i') });
+        agencyFilter.$or = or;
+        const matchedAgencies = await Agency.find(agencyFilter).select('_id').lean();
+        filter.agencyIds = { $in: matchedAgencies.map((a) => a._id) };
+      }
+
       const [items, total] = await Promise.all([
         AgencyGroup.find(filter)
           .sort({ createdAt: -1 })

@@ -165,22 +165,61 @@ export interface SearchFanoutResult {
   errors: { supplierCode: string; code: string; message: string }[];
 }
 
+// Hard ceiling on how long any single supplier may take before the fanout
+// gives up on it. Each adapter ALSO has its own (longer) per-call timeout
+// (15–30s), but Promise.allSettled waits for the slowest — so without this
+// deadline one unreachable supplier (e.g. a down sandbox) drags every search
+// to ~30s and the flights API looks "unresponsive". This caps total search
+// latency to ~FANOUT_DEADLINE_MS regardless of supplier health. Override with
+// SEARCH_FANOUT_TIMEOUT_MS.
+const FANOUT_DEADLINE_MS = Number(process.env.SEARCH_FANOUT_TIMEOUT_MS) || 12_000;
+
+// Race a supplier call against the fanout deadline. On deadline, reject with a
+// TIMEOUT-coded error so the caller surfaces it like any other supplier failure.
+// The underlying call keeps running in the background only long enough for the
+// breaker to record its real outcome (so breaker stats stay accurate).
+function withFanoutDeadline<T>(code: string, call: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new SupplierAdapterError(
+        'TIMEOUT',
+        `${code} exceeded fanout deadline of ${FANOUT_DEADLINE_MS}ms`,
+        code,
+      );
+      reject(err);
+    }, FANOUT_DEADLINE_MS);
+    timer.unref?.();
+    call.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 // Fan-out search across all adapters with per-call timeouts. Whichever adapters finish
 // in time contribute their results; the rest are surfaced as errors. Spec §7.3.
 //
 // Each call is wrapped in the per-supplier circuit breaker — when a supplier
 // trips OPEN (>30% errors over 60s), it's skipped immediately on subsequent
 // calls (no upstream hit) and surfaced as a `BREAKER_OPEN` error instead of
-// dragging the whole fanout to its timeout floor.
+// dragging the whole fanout to its timeout floor — plus the fanout deadline
+// above as a hard backstop so a single hung supplier can't stall the response.
 export async function fanoutSearch(
   adapters: readonly SupplierAdapter[],
   req: NormalizedSearchRequest,
 ): Promise<SearchFanoutResult> {
   const settled = await Promise.allSettled(
     adapters.map((a) =>
-      supplierBreaker
-        .exec(a.code, () => a.search(req))
-        .then((r) => ({ supplier: a.code, options: r.options })),
+      withFanoutDeadline(
+        a.code,
+        supplierBreaker.exec(a.code, () => a.search(req)),
+      ).then((r) => ({ supplier: a.code, options: r.options })),
     ),
   );
 

@@ -19,7 +19,7 @@
 // state (so it can send `ssrSelections` in the hold body, and so this stays
 // trivially testable).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Apple, Briefcase, Loader2, ArmchairIcon } from 'lucide-react';
 import type { SsrSelections } from '@tripbng/shared';
 import { Badge, Button, Card, CardContent } from '@/components/ui';
@@ -130,9 +130,22 @@ export function SsrPicker(props: SsrPickerProps) {
   const [bagPicks, setBagPicks] = useState<Map<BagKey, BaggageOption>>(new Map());
   const [seatPicks, setSeatPicks] = useState<Map<SeatKey, SeatOption>>(new Map());
 
+  // Keep the latest callback + routing in refs so the bubble-up effect can
+  // depend only on the pick maps (and catalog/flags) — never on `onChange` or
+  // `segmentRouting`, whose identities change every render when the parent
+  // passes them inline. Depending on those caused an infinite update loop.
+  const onChangeRef = useRef(onChange);
+  const routingRef = useRef(segmentRouting);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+    routingRef.current = segmentRouting;
+  });
+
   // Bubble up whenever a pick changes. Convert the internal Maps into the
   // canonical SsrSelections shape the API expects.
   useEffect(() => {
+    const onChange = onChangeRef.current;
+    const segmentRouting = routingRef.current;
     if (!supportsSsr || !catalog) {
       onChange(undefined);
       return;
@@ -214,7 +227,7 @@ export function SsrPicker(props: SsrPickerProps) {
     if (out.baggage && out.baggage.length > 0) cleaned.baggage = out.baggage;
     if (out.seats && out.seats.length > 0) cleaned.seats = out.seats;
     onChange(Object.keys(cleaned).length === 0 ? undefined : cleaned);
-  }, [supportsSsr, catalog, mealPicks, bagPicks, seatPicks, segmentRouting, onChange, hideBaggage, hideSeats]);
+  }, [supportsSsr, catalog, mealPicks, bagPicks, seatPicks, hideBaggage, hideSeats]);
 
   // Total add-on price across all picks — surfaced in the section header.
   const addOnTotal = useMemo(() => {

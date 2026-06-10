@@ -1,10 +1,13 @@
 import { Router, type Router as RouterT } from 'express';
 import { Types } from 'mongoose';
+import { z } from 'zod';
 import {
   AppError,
   CreateInventoryRequestSchema,
+  INVENTORY_STATUS,
   InventoryCalendarQuerySchema,
   PaginationQuerySchema,
+  TRAVEL_TYPE,
   UpdateInventoryRequestSchema,
 } from '@tripbng/shared';
 import { validate } from '../utils/validate.js';
@@ -24,15 +27,43 @@ export const inventoryRouter: RouterT = Router();
 
 inventoryRouter.use(authenticate, requireAuth);
 
+// Manage Inventory list query — the reference search fields.
+const InventoryListQuerySchema = PaginationQuerySchema.extend({
+  inventoryName: z.string().trim().optional(),
+  inventoryCode: z.string().trim().optional(),
+  origin: z.string().trim().optional(),
+  destination: z.string().trim().optional(),
+  airline: z.string().trim().optional(),
+  pnr: z.string().trim().optional(),
+  supplierId: z.string().regex(/^[a-fA-F0-9]{24}$/).optional(),
+  travelType: z.enum(TRAVEL_TYPE).optional(),
+  status: z.enum(INVENTORY_STATUS).optional(),
+  startDate: z.coerce.date().optional(),
+  endDate: z.coerce.date().optional(),
+});
+
 inventoryRouter.get(
   '/',
   requirePermission('inventory:read'),
-  validate(PaginationQuerySchema, 'query'),
+  validate(InventoryListQuerySchema, 'query'),
   async (req, res, next) => {
     try {
-      const { page, limit, q } = req.query as unknown as ReturnType<
-        typeof PaginationQuerySchema.parse
-      >;
+      const {
+        page,
+        limit,
+        q,
+        inventoryName,
+        inventoryCode,
+        origin,
+        destination,
+        airline,
+        pnr,
+        supplierId,
+        travelType,
+        status,
+        startDate,
+        endDate,
+      } = req.query as unknown as ReturnType<typeof InventoryListQuerySchema.parse>;
       const filter: Record<string, unknown> = { tenantId: req.auth!.tenantId };
       if (q) {
         filter.$or = [
@@ -42,6 +73,18 @@ inventoryRouter.get(
           { 'destination.code': new RegExp(`^${q.toUpperCase()}`) },
         ];
       }
+      if (inventoryName) filter.inventoryName = new RegExp(inventoryName, 'i');
+      if (inventoryCode) filter.inventoryCode = new RegExp(inventoryCode, 'i');
+      if (origin) filter['origin.code'] = new RegExp(`^${origin.toUpperCase()}`);
+      if (destination) filter['destination.code'] = new RegExp(`^${destination.toUpperCase()}`);
+      if (airline) filter['segments.airline.code'] = airline.toUpperCase();
+      if (pnr) filter.airlinePnr = new RegExp(pnr, 'i');
+      if (supplierId) filter.supplierId = new Types.ObjectId(supplierId);
+      if (travelType) filter.travelType = travelType;
+      if (status) filter.status = status;
+      // Date range — keep inventories whose series window overlaps [startDate, endDate].
+      if (startDate) filter.seriesEndDate = { $gte: startDate };
+      if (endDate) filter.seriesStartDate = { $lte: endDate };
       const [items, total] = await Promise.all([
         Inventory.find(filter)
           .sort({ createdAt: -1 })

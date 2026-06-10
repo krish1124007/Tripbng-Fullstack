@@ -26,6 +26,7 @@ import {
   setIntegrationOverride,
 } from '../services/integration-status.service.js';
 import { recordAudit } from '../services/audit.service.js';
+import { invalidateSearchCache } from '../services/search-cache.js';
 import { z } from 'zod';
 import { requireRole } from '../middleware/rbac.js';
 
@@ -203,6 +204,8 @@ supplierRouter.patch(
         before: { status: before.status, name: before.name },
         after: { status: supplier.status, name: supplier.name },
       });
+      // Supplier status / airline / capability edits change what search returns.
+      await invalidateSearchCache(req.auth!.tenantId);
       return ok(res, serializeSupplier(supplier));
     } catch (err) {
       next(err);
@@ -274,6 +277,7 @@ supplierRouter.post(
         ...input,
         createdBy: req.auth!.userId,
       });
+      await invalidateSearchCache(req.auth!.tenantId);
       return created(res, { id: String(src._id) });
     } catch (err) {
       next(err);
@@ -295,6 +299,7 @@ supplierRouter.patch(
         { new: true },
       );
       if (!src) throw new AppError('NOT_FOUND');
+      await invalidateSearchCache(req.auth!.tenantId);
       return ok(res, { id: String(src._id) });
     } catch (err) {
       next(err);
@@ -313,6 +318,7 @@ supplierRouter.delete(
         tenantId: req.auth!.tenantId,
       });
       if (!src) throw new AppError('NOT_FOUND');
+      await invalidateSearchCache(req.auth!.tenantId);
       return ok(res, { ok: true });
     } catch (err) {
       next(err);

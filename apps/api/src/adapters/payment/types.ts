@@ -3,7 +3,12 @@
 
 import type { Types } from 'mongoose';
 
-export type PaymentProviderCode = 'ICICI_EAZYPAY' | 'PHONEPE' | 'RAZORPAY' | 'MANUAL';
+export type PaymentProviderCode =
+  | 'ICICI_EAZYPAY'
+  | 'ORANGE_PG'
+  | 'PHONEPE'
+  | 'RAZORPAY'
+  | 'MANUAL';
 
 export type PaymentCapability =
   | 'WALLET_TOPUP'

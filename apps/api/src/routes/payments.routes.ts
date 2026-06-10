@@ -135,6 +135,57 @@ paymentsRouter.post(
   },
 );
 
+/** Orange PG (ICICI pgpay) return URL (POST). Verifies the V1 secureHash,
+ *  marks the payment success/failed (markSuccess credits the wallet). */
+paymentsRouter.post(
+  '/orange-pg/return',
+  express.urlencoded({ extended: true, limit: '64kb' }),
+  async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const merchantTxnNo = (body['merchantTxnNo'] as string) ?? '';
+    if (!merchantTxnNo) {
+      return res.redirect('/wallet/topup/result?error=no-reference');
+    }
+    try {
+      // gatewayTxnId was set to the provider session id (= merchantTxnNo) at
+      // initiate; fall back to txnCode for safety.
+      const pt =
+        (await PaymentTransaction.findOne({ gatewayTxnId: merchantTxnNo })) ??
+        (await PaymentTransaction.findOne({ txnCode: merchantTxnNo }));
+      if (!pt) {
+        return res.redirect(`/wallet/topup/result?ref=${merchantTxnNo}&error=not-found`);
+      }
+      const provider = await getProvider({
+        tenantId: pt.tenantId.toHexString(),
+        providerCode: 'ORANGE_PG',
+      });
+      const verified = await provider.verify({
+        paymentTransactionCode: pt.txnCode,
+        rawPayload: body,
+      });
+      if (verified.status === 'SUCCESS') {
+        await paymentService.markSuccess(pt._id, {
+          verificationMethod: 'RETURN_URL',
+          gatewayTxnId: verified.gatewayTxnId,
+          paymentInstrument: verified.paymentInstrument,
+          paymentInstrumentDetails: verified.paymentInstrumentDetails,
+          gatewayResponsePayload: verified.parsed,
+        });
+      } else if (verified.status === 'FAILED') {
+        await paymentService.markFailed(pt._id, {
+          failureCode: verified.failureCode,
+          failureReason: verified.failureReason,
+          gatewayResponsePayload: verified.parsed,
+        });
+      }
+      return res.redirect(`/wallet/topup/result?ref=${pt.txnCode}`);
+    } catch (err) {
+      logger.error({ err, merchantTxnNo }, 'orange-pg return-URL handler failed');
+      return res.redirect(`/wallet/topup/result?ref=${merchantTxnNo}&error=verify-failed`);
+    }
+  },
+);
+
 // ────────── Authenticated routes ──────────
 
 paymentsRouter.use(authenticate, requireAuth);

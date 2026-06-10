@@ -20,6 +20,7 @@ import {
   ArrowRight,
   CheckCircle2,
   CreditCard,
+  Landmark,
   Loader2,
   ShieldCheck,
   Smartphone,
@@ -44,7 +45,7 @@ import { useAuthStore } from '@/lib/auth-store';
 import { formatPaiseAsINR } from '@/lib/money';
 import { cn } from '@/lib/utils';
 
-type ProviderCode = 'ICICI_EAZYPAY' | 'PHONEPE';
+type ProviderCode = 'ICICI_EAZYPAY' | 'ORANGE_PG' | 'PHONEPE';
 
 interface InitiateTopupResponse {
   paymentTxnId: string;
@@ -245,6 +246,19 @@ export function PaymentMethodDialog({
             cta="Continue to ICICI"
           />
 
+          {/* Orange PG (ICICI pgpay) card */}
+          <PaymentMethodCard
+            icon={Landmark}
+            tone="orange"
+            title="Pay via Orange PG"
+            subtitle="ICICI gateway · UPI · Card · Net banking — settles to your wallet first"
+            disabled={busy !== null}
+            busy={busy === 'ORANGE_PG'}
+            badge={{ label: 'Redirect to ICICI', tone: 'neutral' }}
+            onClick={() => payViaGateway('ORANGE_PG')}
+            cta="Continue to Orange PG"
+          />
+
           {/* PhonePe card */}
           <PaymentMethodCard
             icon={Smartphone}
@@ -276,7 +290,7 @@ export function PaymentMethodDialog({
 
 interface PaymentMethodCardProps {
   icon: typeof Wallet;
-  tone: 'brand' | 'info' | 'accent';
+  tone: 'brand' | 'info' | 'accent' | 'orange';
   title: string;
   subtitle: string;
   disabled: boolean;
@@ -301,6 +315,7 @@ function PaymentMethodCard({
     brand: 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300',
     info: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
     accent: 'bg-purple-50 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300',
+    orange: 'bg-orange-50 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300',
   }[tone];
   const badgeToneClass = badge
     ? {

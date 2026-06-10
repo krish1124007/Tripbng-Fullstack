@@ -12,14 +12,13 @@ Enterprise B2B flight distribution platform for the Indian travel trade.
 ## Prerequisites
 - Node.js >= 22 (`nvm use`)
 - pnpm >= 10 (`npm i -g pnpm`)
-- Docker (for local Mongo + Redis)
+- MongoDB & Redis (running locally)
 
 ## Quick start
 
 ```bash
 pnpm install
 cp .env.example .env
-pnpm docker:up        # starts Mongo + Redis
 pnpm seed             # seeds demo data
 pnpm dev              # starts api (4000) + web (3000)
 ```

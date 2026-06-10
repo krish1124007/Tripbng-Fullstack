@@ -76,12 +76,12 @@ const NAV: NavGroup[] = [
   {
     label: 'Catalog',
     items: [
-      { href: '/inventories', label: 'Inventory', icon: Boxes, permission: 'inventory:read' },
+      { href: '/inventories', label: 'Manage Inventory', icon: Boxes, permission: 'inventory:read' },
       { href: '/inventories/calendar', label: 'Calendar', icon: CalendarIcon, permission: 'inventory:read' },
       { href: '/suppliers', label: 'Suppliers', icon: Truck, permission: 'supplier:read' },
-      { href: '/markup-rules', label: 'Markup rules', icon: Percent, permission: 'markup-rule:read' },
-      { href: '/fare-rules', label: 'Fare rules', icon: Receipt, permission: 'fare-rule:read' },
-      { href: '/policies', label: 'Policies', icon: Tags, permission: 'policy:read' },
+      { href: '/markup-rules', label: 'Agency Markup', icon: Percent, permission: 'markup-rule:read' },
+      { href: '/fare-rules', label: 'Manage Fare Rule', icon: Receipt, permission: 'fare-rule:read' },
+      { href: '/policies', label: 'Manage Policy', icon: Tags, permission: 'policy:read' },
       {
         href: '/admin/holidays/packages',
         label: 'Holiday packages',
@@ -101,7 +101,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: '/distributors', label: 'Distributors', icon: Network, permission: 'distributor:read' },
       { href: '/agencies', label: 'Agencies', icon: Building2, permission: 'agency:read:all' },
-      { href: '/agency-groups', label: 'Agency groups', icon: Building2, permission: 'agency-group:read' },
+      { href: '/agency-groups', label: 'Agency Group', icon: Building2, permission: 'agency-group:read' },
       { href: '/users', label: 'Users', icon: Users, permission: 'user:read' },
     ],
   },

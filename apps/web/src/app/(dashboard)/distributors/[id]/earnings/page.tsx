@@ -1,7 +1,8 @@
 'use client';
 
-import { use, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import { ArrowLeft, Download } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { EarningsResponse, EarningsRow } from '@tripbng/shared';
@@ -36,12 +37,9 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export default function DistributorEarningsPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = use(params);
+export default function DistributorEarningsPage() {
+  const params = useParams<{ id: string }>();
+  const id = params?.id ?? '';
 
   const [from, setFrom] = useState(dateMinusDays(30));
   const [to, setTo] = useState(todayStr());

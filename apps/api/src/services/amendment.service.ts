@@ -1,6 +1,8 @@
 import {
   AppError,
   CODE_PREFIX,
+  computePolicyBandFeePaise,
+  matchPolicyBand,
   type AmendmentType,
   type CreateAmendmentRequest,
   type PublicAmendment,
@@ -43,16 +45,10 @@ async function computeFee(bookingId: string, type: AmendmentType): Promise<numbe
     Math.floor((booking.travelDate.getTime() - Date.now()) / HOUR_MS),
   );
   const bands = type === 'RESCHEDULE' ? rule.reschedulingBands : rule.cancellationBands;
-  const matched = (bands ?? []).find(
-    (b) =>
-      hoursBefore >= b.hoursBeforeFrom &&
-      (b.hoursBeforeTo == null || hoursBefore < b.hoursBeforeTo),
-  );
+  const matched = matchPolicyBand(bands ?? [], hoursBefore);
   if (!matched) return 0;
   const base = booking.pricing?.agencyPayablePaise ?? 0;
-  if (matched.feeType === 'NON_REFUNDABLE') return base;
-  if (matched.feeType === 'FLAT') return Math.min(base, matched.feeValue);
-  return Math.min(base, Math.round((base * matched.feeValue) / 10000));
+  return computePolicyBandFeePaise(matched, base);
 }
 
 export async function createAmendment(

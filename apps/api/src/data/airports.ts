@@ -64,6 +64,17 @@ const PRIORITY_IATA = new Set([
 
 export const AIRPORTS: readonly Airport[] = GENERATED;
 
+// IATA → ISO-2 country code, built once at boot. Used by the supplier-access
+// resolver to classify a route as DOMESTIC vs INTERNATIONAL.
+const COUNTRY_BY_IATA = new Map<string, string>(
+  AIRPORTS.map((a) => [a.iata.toUpperCase(), a.countryCode.toUpperCase()]),
+);
+
+/** ISO-2 country code for an IATA airport, or null if the code is unknown. */
+export function countryCodeForIata(iata: string): string | null {
+  return COUNTRY_BY_IATA.get(iata.toUpperCase()) ?? null;
+}
+
 // Naive in-memory search by code, name, or city. ~6k rows; sub-ms in practice.
 // Ranks: exact IATA → priority hub starts-with → other starts-with → contains.
 export function searchAirports(q: string, limit = 10): Airport[] {

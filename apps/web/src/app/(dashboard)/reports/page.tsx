@@ -3,13 +3,17 @@
 import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Ban,
+  BookText,
   Building2,
   Calendar,
   CalendarDays,
+  Coins,
   FileSpreadsheet,
   GitCompare,
   PieChart,
   Receipt,
+  Ticket,
   TrendingUp,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -25,7 +29,13 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { ReportColumn, ReportResponse, ReportType } from '@tripbng/shared';
+import {
+  BOOKING_STATUS,
+  TRANSACTIONAL_REPORTS,
+  type ReportColumn,
+  type ReportResponse,
+  type ReportType,
+} from '@tripbng/shared';
 import {
   Badge,
   Button,
@@ -37,6 +47,11 @@ import {
   EmptyState,
   Input,
   PageHeader,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Skeleton,
 } from '@/components/ui';
 import { useApiQuery } from '@/lib/api-client';
@@ -52,6 +67,10 @@ const REPORTS: {
   description: string;
   icon: typeof TrendingUp;
 }[] = [
+  { type: 'BOOKING', label: 'Booking report', description: 'Every booking with fare breakdown', icon: Ticket },
+  { type: 'CANCELLATION', label: 'Cancellation report', description: 'Cancelled & refunded bookings', icon: Ban },
+  { type: 'COMMISSION', label: 'Commission earned', description: 'Platform commission per ticket', icon: Coins },
+  { type: 'LEDGER', label: 'Agency ledger', description: 'Wallet debits & credits', icon: BookText },
   { type: 'SALES', label: 'Sales', description: 'GMV + earnings by day', icon: TrendingUp },
   { type: 'AGENCY_PERFORMANCE', label: 'Agency performance', description: 'Bookings, refund rate, avg ticket', icon: Building2 },
   { type: 'SUPPLIER_COMPARISON', label: 'Supplier comparison', description: 'Win rate, avg fare, GMV', icon: GitCompare },
@@ -73,16 +92,31 @@ const QUICK_RANGES = [
   { label: '90d', days: 90 },
 ] as const;
 
+const STATUS_ALL = '__ALL__';
+
 export default function ReportsPage() {
   const accessToken = useAuthStore((s) => s.accessToken);
-  const [active, setActive] = useState<ReportType>('SALES');
+  const [active, setActive] = useState<ReportType>('BOOKING');
   const [from, setFrom] = useState(todayPlus(-30));
   const [to, setTo] = useState(todayPlus(0));
+  const [agencyName, setAgencyName] = useState('');
+  const [bookingStatus, setBookingStatus] = useState<string>(STATUS_ALL);
   const [downloading, setDownloading] = useState(false);
 
-  const report = useApiQuery<ReportResponse>(['report', active, from, to], '/api/v1/reports', {
-    query: { type: active, from, to },
-  });
+  const reportQuery = {
+    type: active,
+    from,
+    to,
+    agencyName: agencyName.trim() || undefined,
+    bookingStatus: bookingStatus === STATUS_ALL ? undefined : bookingStatus,
+  };
+  const report = useApiQuery<ReportResponse>(
+    ['report', active, from, to, agencyName.trim(), bookingStatus],
+    '/api/v1/reports',
+    { query: reportQuery },
+  );
+
+  const isTransactional = TRANSACTIONAL_REPORTS.includes(active);
 
   const setRange = (days: number) => {
     setFrom(todayPlus(-days));
@@ -92,8 +126,11 @@ export default function ReportsPage() {
   const downloadXlsx = async () => {
     setDownloading(true);
     try {
+      const params = new URLSearchParams({ type: active, from, to });
+      if (agencyName.trim()) params.set('agencyName', agencyName.trim());
+      if (bookingStatus !== STATUS_ALL) params.set('bookingStatus', bookingStatus);
       await downloadAuthenticatedFile(
-        `/api/v1/reports/export?type=${active}&from=${from}&to=${to}`,
+        `/api/v1/reports/export?${params.toString()}`,
         `${active.toLowerCase()}-${from}-to-${to}.xlsx`,
         accessToken,
       );
@@ -191,7 +228,27 @@ export default function ReportsPage() {
                   </button>
                 );
               })}
-              <div className="ml-auto flex items-center gap-2">
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <Input
+                  placeholder="Agency name / code"
+                  value={agencyName}
+                  onChange={(e) => setAgencyName(e.target.value)}
+                  className="h-8 w-44"
+                  fullWidth={false}
+                />
+                <Select value={bookingStatus} onValueChange={setBookingStatus}>
+                  <SelectTrigger className="h-8 w-40">
+                    <SelectValue placeholder="All statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={STATUS_ALL}>All statuses</SelectItem>
+                    {BOOKING_STATUS.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s.replace(/_/g, ' ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Input
                   type="date"
                   value={from}
@@ -219,8 +276,17 @@ export default function ReportsPage() {
             </>
           ) : report.data ? (
             <>
-              <ReportKpiStrip report={report.data} type={active} />
-              <ReportHeroChart report={report.data} type={active} label={activeMeta.label} />
+              {isTransactional ? (
+                <p className="text-xs text-ink-3">
+                  {report.data.rows.length} row{report.data.rows.length === 1 ? '' : 's'} ·{' '}
+                  {report.data.from} → {report.data.to}
+                </p>
+              ) : (
+                <>
+                  <ReportKpiStrip report={report.data} type={active} />
+                  <ReportHeroChart report={report.data} type={active} label={activeMeta.label} />
+                </>
+              )}
               <ReportTable report={report.data} />
             </>
           ) : null}

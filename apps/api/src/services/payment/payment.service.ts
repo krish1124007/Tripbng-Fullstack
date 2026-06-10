@@ -12,7 +12,7 @@
 //   4. sweepStalePayments — for PTs stuck in PENDING > 30 min, fetchStatus
 //      from the provider and mark SUCCESS / FAILED / TIMEOUT accordingly.
 
-import { Types } from 'mongoose';
+import type { Types } from 'mongoose';
 import { AppError } from '@tripbng/shared';
 import { logger } from '../../config/logger.js';
 import { Counter } from '../../models/Counter.js';
@@ -32,7 +32,7 @@ export interface InitiateTopupInput {
   walletId: Types.ObjectId;
   tenantId: Types.ObjectId;
   amount: number;
-  providerCode: 'ICICI_EAZYPAY' | 'PHONEPE' | 'RAZORPAY';
+  providerCode: 'ICICI_EAZYPAY' | 'ORANGE_PG' | 'PHONEPE' | 'RAZORPAY';
   initiatedByUserId: Types.ObjectId;
   agencyId?: Types.ObjectId | null;
   agencyName?: string;

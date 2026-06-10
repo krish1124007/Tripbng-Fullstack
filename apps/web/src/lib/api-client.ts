@@ -8,7 +8,7 @@ import {
   type UseMutationOptions,
   type UseQueryOptions,
 } from '@tanstack/react-query';
-import { apiFetch, ApiCallError } from './api';
+import { apiFetch, apiFetchEnvelope, type ApiCallError } from './api';
 import { useAuthStore } from './auth-store';
 
 function buildUrl(path: string, query?: Record<string, unknown>): string {
@@ -69,19 +69,13 @@ export function useApiPaginatedQuery<TItem>(
     enabled: enabled !== false && !!accessToken,
     staleTime,
     queryFn: async ({ signal }: QueryFunctionContext) => {
-      const res = await fetch(buildUrl(`${process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000'}${path}`, query), {
-        credentials: 'include',
+      // Routes through apiFetchEnvelope so paginated tables get the same
+      // silent token-refresh-on-401 and base-URL handling as every other call.
+      const { data, meta } = await apiFetchEnvelope<TItem[]>(buildUrl(path, query), {
+        accessToken,
         signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
       });
-      const json = (await res.json()) as
-        | { success: true; data: TItem[]; meta?: ApiMeta }
-        | { success: false; error: { code: string; message: string } };
-      if (!json.success) throw new ApiCallError(json.error.code, json.error.message);
-      return { data: json.data, meta: json.meta ?? {} };
+      return { data, meta: (meta ?? {}) as ApiMeta };
     },
   });
 }

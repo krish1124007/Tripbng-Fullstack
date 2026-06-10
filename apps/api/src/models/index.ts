@@ -11,6 +11,7 @@ export * from './AgencyRegistration.js';
 export * from './AuditLog.js';
 export * from './Supplier.js';
 export * from './SupplierSource.js';
+export * from './SupplierMap.js';
 export * from './Inventory.js';
 export * from './MarkupRule.js';
 export * from './FareRule.js';

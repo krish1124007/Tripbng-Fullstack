@@ -1,6 +1,8 @@
 import {
   AppError,
   CODE_PREFIX,
+  computePolicyBandFeePaise,
+  matchPolicyBand,
   type ConfirmBookingRequest,
   type HoldRequest,
   type SearchResult,
@@ -905,18 +907,11 @@ async function computeCancellationFee(booking: BookingDoc): Promise<number> {
     Math.floor((departure.getTime() - Date.now()) / (60 * 60 * 1000)),
   );
 
-  const matching = (rule.cancellationBands ?? []).find(
-    (b) =>
-      hoursBefore >= b.hoursBeforeFrom &&
-      (b.hoursBeforeTo == null || hoursBefore < b.hoursBeforeTo),
-  );
+  const matching = matchPolicyBand(rule.cancellationBands ?? [], hoursBefore);
   if (!matching) return 0;
 
   const baseAmount = booking.pricing?.agencyPayablePaise ?? 0;
-  if (matching.feeType === 'NON_REFUNDABLE') return baseAmount;
-  if (matching.feeType === 'FLAT') return Math.min(baseAmount, matching.feeValue);
-  // PERCENT — basis-points × 100. 2500 = 25%.
-  return Math.min(baseAmount, Math.round((baseAmount * matching.feeValue) / 10000));
+  return computePolicyBandFeePaise(matching, baseAmount);
 }
 
 function countPax(passengers: HoldRequest['passengers']): {

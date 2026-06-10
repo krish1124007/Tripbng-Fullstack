@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
@@ -8,7 +8,6 @@ import {
   CreateMarkupRuleRequestSchema,
   MARKUP_SCOPE,
   MARKUP_STATUS,
-  MARKUP_VALUE_TYPE,
   PAX_TYPE,
   TRAVEL_CLASS,
   TRAVEL_TYPE,
@@ -88,13 +87,67 @@ function PillToggle<T extends string>({
               'rounded-md border px-3 py-1.5 text-xs font-medium font-mono transition',
               active
                 ? 'border-accent bg-accent-soft text-accent'
-                : 'border-border bg-surface-2 text-ink-2 hover:bg-surface-1',
+                : 'border-2 bg-surface-2 text-ink-2 hover:bg-surface-1',
             )}
           >
             {opt}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// Small uppercase section heading used to group the drawer form.
+function SectionTitle({ children }: { children: ReactNode }) {
+  return (
+    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{children}</h3>
+  );
+}
+
+// Value entered in human units (₹ for FLAT, % for PERCENT) but stored ×100
+// (paise for FLAT, basis-points×100 for PERCENT) — both share the ×100 factor,
+// so one component handles both. Adornment switches with the value type.
+function ScaledValueInput({
+  id,
+  unit,
+  value,
+  onChange,
+  placeholder,
+}: {
+  id?: string;
+  unit: '₹' | '%';
+  value: number | undefined;
+  onChange: (next: number | undefined) => void;
+  placeholder?: string;
+}) {
+  const human = value == null || Number.isNaN(value) ? '' : String(value / 100);
+  return (
+    <div className="relative">
+      {unit === '₹' ? (
+        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-ink-3">
+          ₹
+        </span>
+      ) : null}
+      <Input
+        id={id}
+        type="number"
+        min="0"
+        step="0.01"
+        inputMode="decimal"
+        placeholder={placeholder}
+        className={unit === '₹' ? 'pl-7' : 'pr-8'}
+        value={human}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === '' ? undefined : Math.round(parseFloat(v) * 100));
+        }}
+      />
+      {unit === '%' ? (
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-3">
+          %
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -132,6 +185,8 @@ export function MarkupRuleDrawer({
   const scope = watch('scope');
   const valueType = watch('valueType');
   const status = watch('status');
+  const value = watch('value');
+  const maxValuePaise = watch('maxValuePaise');
   const conditions = watch('conditions') ?? {};
 
   useEffect(() => {
@@ -188,104 +243,124 @@ export function MarkupRuleDrawer({
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${target?.name}` : 'New markup rule'}</DialogTitle>
         </DialogHeader>
-        <form onSubmit={submit} className="flex flex-1 flex-col">
-          <DialogBody className="space-y-5">
-            <FormField id="name" label="Rule name" required error={errors.name?.message}>
-              <Input id="name" {...register('name')} />
-            </FormField>
-
-            <div className="grid grid-cols-2 gap-3">
-              <FormField id="scope" label="Scope" required>
-                <Select
-                  value={scope}
-                  onValueChange={(v) => setValue('scope', v as CreateMarkupRuleRequest['scope'])}
-                  disabled={!!editing || me?.role !== 'SUPER_ADMIN'}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MARKUP_SCOPE.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <DialogBody className="space-y-6">
+            {/* ── Basics ── */}
+            <div className="space-y-4">
+              <SectionTitle>Basics</SectionTitle>
+              <FormField id="name" label="Rule name" required error={errors.name?.message}>
+                <Input id="name" placeholder="e.g. Domestic 6E — ₹250 / pax" {...register('name')} />
               </FormField>
-              <FormField id="status" label="Status">
-                <Select
-                  value={status}
-                  onValueChange={(v) => setValue('status', v as CreateMarkupRuleRequest['status'])}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MARKUP_STATUS.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <FormField id="valueType" label="Value type" required>
-                <Select
-                  value={valueType}
-                  onValueChange={(v) => setValue('valueType', v as CreateMarkupRuleRequest['valueType'])}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MARKUP_VALUE_TYPE.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              <FormField
-                id="value"
-                label={valueType === 'FLAT' ? 'Value (paise)' : 'Value (bp×100)'}
-                hint={valueType === 'PERCENT' ? '250 = 2.50%' : '100000 = ₹1000'}
-                required
-                error={errors.value?.message}
-              >
-                <Input id="value" type="number" min="0" {...register('value', { valueAsNumber: true })} />
-              </FormField>
-              <FormField id="priority" label="Priority" hint="Lower wins">
-                <Input
-                  id="priority"
-                  type="number"
-                  min="0"
-                  {...register('priority', { valueAsNumber: true })}
-                />
-              </FormField>
-              {valueType === 'PERCENT' ? (
-                <FormField id="maxValuePaise" label="Cap (paise)" className="col-span-3">
-                  <Input
-                    id="maxValuePaise"
-                    type="number"
-                    min="0"
-                    {...register('maxValuePaise', {
-                      setValueAs: (v) => (v === '' || v == null ? undefined : Number(v)),
-                    })}
-                  />
+              <div className="grid grid-cols-2 gap-3">
+                <FormField id="scope" label="Scope" required>
+                  <Select
+                    value={scope}
+                    onValueChange={(v) => setValue('scope', v as CreateMarkupRuleRequest['scope'])}
+                    disabled={!!editing || me?.role !== 'SUPER_ADMIN'}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MARKUP_SCOPE.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </FormField>
-              ) : null}
+                <FormField id="status" label="Status">
+                  <Select
+                    value={status}
+                    onValueChange={(v) => setValue('status', v as CreateMarkupRuleRequest['status'])}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MARKUP_STATUS.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              </div>
             </div>
 
             <Separator />
-            <h3 className="text-sm font-medium text-ink-2">Conditions</h3>
-            <p className="text-xs text-ink-3">
-              All populated fields must match. Empty = no constraint.
-            </p>
+
+            {/* ── Markup value ── */}
+            <div className="space-y-4">
+              <SectionTitle>Markup value</SectionTitle>
+              <div className="grid grid-cols-2 gap-3">
+                <FormField id="valueType" label="Type" required>
+                  <Select
+                    value={valueType}
+                    onValueChange={(v) =>
+                      setValue('valueType', v as CreateMarkupRuleRequest['valueType'])
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="FLAT">Flat (₹)</SelectItem>
+                      <SelectItem value="PERCENT">Percentage (%)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+                <FormField
+                  id="value"
+                  label={valueType === 'FLAT' ? 'Amount per pax' : 'Percentage'}
+                  required
+                  error={errors.value?.message}
+                >
+                  <ScaledValueInput
+                    id="value"
+                    unit={valueType === 'FLAT' ? '₹' : '%'}
+                    value={value}
+                    onChange={(v) =>
+                      setValue('value', v as number, { shouldValidate: true })
+                    }
+                    placeholder={valueType === 'FLAT' ? '250' : '2.5'}
+                  />
+                </FormField>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <FormField id="priority" label="Priority" hint="Lower wins">
+                  <Input
+                    id="priority"
+                    type="number"
+                    min="0"
+                    {...register('priority', { valueAsNumber: true })}
+                  />
+                </FormField>
+                {valueType === 'PERCENT' ? (
+                  <FormField id="maxValuePaise" label="Max cap" hint="optional">
+                    <ScaledValueInput
+                      id="maxValuePaise"
+                      unit="₹"
+                      value={maxValuePaise}
+                      onChange={(v) => setValue('maxValuePaise', v)}
+                      placeholder="No cap"
+                    />
+                  </FormField>
+                ) : null}
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* ── Conditions ── */}
+            <div>
+              <SectionTitle>Conditions</SectionTitle>
+              <p className="mt-1 text-xs text-ink-3">
+                All populated fields must match. Leave empty to apply to everything.
+              </p>
+            </div>
 
             <FormField label="Airlines (IATA, comma-separated)">
               <CSVInput

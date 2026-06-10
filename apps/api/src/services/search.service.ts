@@ -17,6 +17,8 @@ import { Policy } from '../models/Policy.js';
 import { priceFare, type PricingMarkupRule } from './pricing/index.js';
 import { Agency } from '../models/Agency.js';
 import { Actor, EVENTS, track } from './analytics.service.js';
+import { airlineAllowed, resolveSupplierAccess } from './supplier-access/index.js';
+import { SEARCH_REQ_PREFIX } from './search-cache.js';
 
 const CACHE_TTL_SECONDS = 60 * 5;
 
@@ -259,13 +261,40 @@ export async function searchFlights(
   }
 
   const adapters = await buildSearchAdapters(ctx.tenantId);
+
+  // Module 3 — centralized supplier-access rules engine. Decides which of the
+  // built adapters may actually be called (Supplier Active → Source Active →
+  // Mapping Allowed → Agency Authorized) and carries each survivor's airline
+  // allow-list for the post-pricing filter below. Fail-open: an unconfigured
+  // tenant lets every active adapter through, so search keeps working until the
+  // Supplier Map is populated.
+  const access = await resolveSupplierAccess(
+    { tenantId: ctx.tenantId, agencyId: ctx.agencyId },
+    request,
+    adapters.map((a) => a.code),
+  );
+  const allowedAdapters = adapters.filter((a) => access.byCode[a.code]?.allowed ?? true);
+  const blocked = adapters.filter((a) => !(access.byCode[a.code]?.allowed ?? true));
+  if (blocked.length > 0) {
+    logger.debug(
+      { blocked: blocked.map((a) => ({ code: a.code, reason: access.byCode[a.code]?.reason })) },
+      'supplier-access: adapters excluded from fanout',
+    );
+  }
+
   const searchId = crypto.randomBytes(8).toString('hex');
-  const fanout = await fanoutSearch(adapters, { searchId, request });
+  const fanout = await fanoutSearch(allowedAdapters, { searchId, request });
 
   const pricingCtx = await loadPricingContext(ctx);
   const bookingDate = new Date();
   const priced: SearchResult[] = [];
   for (const opt of fanout.options) {
+    // Airline restriction (Module 3, rule 3) — a matched mapping/source may
+    // limit a supplier to an airline allow-list. Drop options whose carrier
+    // isn't permitted for the supplier that returned them.
+    const decision = access.byCode[opt.supplierCode];
+    const airline = opt.segments[0]?.airline.code;
+    if (decision && airline && !airlineAllowed(decision, airline)) continue;
     try {
       priced.push(await priceOption(opt, ctx, pricingCtx, request, bookingDate));
     } catch (err) {
@@ -336,7 +365,7 @@ function buildCacheKey(ctx: SearchContext, request: SearchRequest): string {
     .update(`${ctx.agencyId}|${seg}|${request.travelClass}|${JSON.stringify(request.pax)}`)
     .digest('hex')
     .slice(0, 16);
-  return `search:req:${ctx.tenantId}:${hash}`;
+  return `${SEARCH_REQ_PREFIX}${ctx.tenantId}:${hash}`;
 }
 
 export { adapterForCode };

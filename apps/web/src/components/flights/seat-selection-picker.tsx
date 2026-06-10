@@ -17,7 +17,7 @@
 // that BaggageDetailsPicker and SsrPicker use. We fetch once per
 // (supplierCode, fareToken) and reuse the catalog locally.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { ChevronDown, ChevronUp, Loader2, ArmchairIcon, X } from 'lucide-react';
 import type { SsrSeatPick } from '@tripbng/shared';
 import {
@@ -78,19 +78,34 @@ export function SeatSelectionPicker(props: SeatSelectionPickerProps) {
   // Picks keyed by (segmentId, paxIndex). One seat per pax per segment.
   const [picks, setPicks] = useState<Map<SeatKey, SeatOption>>(new Map());
 
-  // Bubble up selections in the canonical SsrSeatPick[] shape.
+  // Keep the latest callback + routing in refs so the bubble-up effect can
+  // depend ONLY on `picks`. Without this, an inline `onChange`/`segmentRouting`
+  // from the parent (new identity every render) makes the effect re-run after
+  // each parent re-render → onChange → parent setState → re-render → loop
+  // ("Maximum update depth exceeded").
+  const onChangeRef = useRef(onChange);
+  const routingRef = useRef(segmentRouting);
   useEffect(() => {
+    onChangeRef.current = onChange;
+    routingRef.current = segmentRouting;
+  });
+
+  // Bubble up selections in the canonical SsrSeatPick[] shape — only when the
+  // actual seat selection (`picks`) changes.
+  useEffect(() => {
+    const emit = onChangeRef.current;
     if (picks.size === 0) {
-      onChange(undefined);
+      emit(undefined);
       return;
     }
+    const routingMap = routingRef.current;
     const out: SsrSeatPick[] = [];
     for (const [key, seat] of picks) {
       const [segmentId, paxIdxStr] = key.split('|');
       if (!segmentId || !paxIdxStr) continue;
       const paxIndex = Number.parseInt(paxIdxStr, 10);
       if (!Number.isFinite(paxIndex)) continue;
-      const routing = segmentRouting?.[segmentId];
+      const routing = routingMap?.[segmentId];
       out.push({
         segmentId,
         airlineCode: routing?.airlineCode,
@@ -107,8 +122,8 @@ export function SeatSelectionPicker(props: SeatSelectionPickerProps) {
         paxIndex,
       });
     }
-    onChange(out.length > 0 ? out : undefined);
-  }, [picks, segmentRouting, onChange]);
+    emit(out.length > 0 ? out : undefined);
+  }, [picks]);
 
   const eligiblePax = useMemo(
     () =>
@@ -299,7 +314,6 @@ function SeatMapDialog({
       if (seat) sum += seat.pricePaise;
     }
     return sum;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picks, activeSegment.segmentId, passengers]);
 
   function selectSeat(seat: SeatOption) {
@@ -548,12 +562,10 @@ function SeatMap({ rows, picks, activeSegmentId, onSelect }: SeatMapProps) {
       {/* Column headers */}
       <div className="mb-2 flex items-center justify-center gap-1.5 text-[9px] font-bold uppercase text-ink-3">
         {allLetters.map((letter, i) => (
-          <>
-            <span key={letter} className="w-7 text-center">
-              {letter}
-            </span>
-            {i === aisleAfter - 1 ? <span key="aisle" className="w-3" /> : null}
-          </>
+          <Fragment key={letter}>
+            <span className="w-7 text-center">{letter}</span>
+            {i === aisleAfter - 1 ? <span className="w-3" /> : null}
+          </Fragment>
         ))}
       </div>
 
@@ -566,21 +578,18 @@ function SeatMap({ rows, picks, activeSegmentId, onSelect }: SeatMapProps) {
             {allLetters.map((letter, i) => {
               const seat = row.seats.find((s: SeatOption) => s.seatNo === letter);
               return (
-                <>
+                <Fragment key={`${row.rowNo}${letter}`}>
                   {seat ? (
                     <Seat
-                      key={`${row.rowNo}${letter}`}
                       seat={seat}
                       isSelected={selectedCodes.has(`${seat.rowNo}${seat.seatNo}`)}
                       onSelect={onSelect}
                     />
                   ) : (
-                    <span key={`${row.rowNo}${letter}-empty`} className="h-7 w-7" />
+                    <span className="h-7 w-7" />
                   )}
-                  {i === aisleAfter - 1 ? (
-                    <span key={`${row.rowNo}-aisle`} className="w-3" />
-                  ) : null}
-                </>
+                  {i === aisleAfter - 1 ? <span className="w-3" /> : null}
+                </Fragment>
               );
             })}
           </div>

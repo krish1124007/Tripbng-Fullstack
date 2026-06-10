@@ -6,6 +6,7 @@ import mongoose, {
   type Model,
   type Types,
 } from 'mongoose';
+import { AGENCY_GROUP_STATUS } from '@tripbng/shared';
 
 const AgencyGroupSchema = new Schema(
   {
@@ -13,6 +14,9 @@ const AgencyGroupSchema = new Schema(
     name: { type: String, required: true, trim: true },
     description: { type: String, default: null },
     agencyIds: [{ type: Schema.Types.ObjectId, ref: 'Agency' }],
+    // Airlines mapped/restricted to this group — surfaced as "Mapped airline count".
+    airlineCodes: [{ type: String, uppercase: true, trim: true }],
+    status: { type: String, enum: AGENCY_GROUP_STATUS, default: 'ACTIVE', index: true },
     distributorId: { type: Schema.Types.ObjectId, ref: 'Distributor', default: null, index: true },
 
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },

@@ -9,8 +9,10 @@ import {
 import { Booking } from '../models/Booking.js';
 import { Agency } from '../models/Agency.js';
 import { Amendment } from '../models/Amendment.js';
+import { WalletTransaction } from '../models/WalletTransaction.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ROW_LIMIT = 1000; // cap for transactional (row-level) reports
 
 interface ReportContext {
   tenantId: string;
@@ -24,7 +26,11 @@ const EARNING_STATUSES = ['TICKETED', 'CONFIRMED'];
 // scopeFilter — every report respects the caller's role. Agencies see only their own data,
 // distributors see their downline, super admin / accounts see everything (with optional
 // explicit filters in the query).
-function scopeFilter(ctx: ReportContext, q: ReportQuery): Record<string, unknown> {
+function scopeFilter(
+  ctx: ReportContext,
+  q: ReportQuery,
+  dateField = 'ticketedAt',
+): Record<string, unknown> {
   const f: Record<string, unknown> = { tenantId: new Types.ObjectId(ctx.tenantId) };
   if (ctx.role === 'AGENCY' || ctx.role === 'SUB_AGENT') {
     if (!ctx.agencyId) throw new AppError('FORBIDDEN');
@@ -40,11 +46,17 @@ function scopeFilter(ctx: ReportContext, q: ReportQuery): Record<string, unknown
     const range: Record<string, Date> = {};
     if (q.from) range.$gte = q.from;
     if (q.to) range.$lte = q.to;
-    f.ticketedAt = range;
+    f[dateField] = range;
   } else {
     // Default to last 30 days for unbounded queries — keeps aggregations bounded.
-    f.ticketedAt = { $gte: new Date(Date.now() - 30 * DAY_MS) };
+    f[dateField] = { $gte: new Date(Date.now() - 30 * DAY_MS) };
   }
+  // Free-text agency search (code or company name) — admin/accounts only.
+  if (q.agencyName && ctx.role !== 'AGENCY' && ctx.role !== 'SUB_AGENT') {
+    const rx = new RegExp(q.agencyName, 'i');
+    f.$or = [{ agencyCode: rx }, { agencyName: rx }];
+  }
+  if (q.bookingStatus) f.status = q.bookingStatus;
   if (q.supplierCode) f.supplierCode = q.supplierCode;
   if (q.airline) f['segments.airline.code'] = q.airline.toUpperCase();
   if (q.origin) f['segments.0.origin.code'] = q.origin.toUpperCase();
@@ -52,6 +64,167 @@ function scopeFilter(ctx: ReportContext, q: ReportQuery): Record<string, unknown
     f['segments.0.destination.code'] = q.destination.toUpperCase();
   }
   return f;
+}
+
+const passengerName = (b: {
+  passengers?: { firstName?: string; lastName?: string }[];
+}): string => {
+  const list = b.passengers ?? [];
+  if (list.length === 0) return '—';
+  const first = `${list[0]?.firstName ?? ''} ${list[0]?.lastName ?? ''}`.trim();
+  return list.length > 1 ? `${first} +${list.length - 1}` : first || '—';
+};
+
+const isoDate = (d: Date | null | undefined): string | null =>
+  d ? new Date(d).toISOString().slice(0, 10) : null;
+
+// ── Booking Report — one row per booking with the full money breakdown. ──
+async function runBooking(ctx: ReportContext, q: ReportQuery): Promise<ReportResponse> {
+  const filter = scopeFilter(ctx, q, 'createdAt');
+  const docs = await Booking.find(filter).sort({ createdAt: -1 }).limit(ROW_LIMIT).lean();
+  const columns: ReportColumn[] = [
+    { key: 'bookingDate', label: 'Booking Date', format: 'date' },
+    { key: 'travelDate', label: 'Travel Date', format: 'date' },
+    { key: 'agencyName', label: 'Agency', format: 'string' },
+    { key: 'pnr', label: 'PNR', format: 'string' },
+    { key: 'ticketNo', label: 'Ticket No', format: 'string' },
+    { key: 'passenger', label: 'Passenger', format: 'string' },
+    { key: 'sector', label: 'Sector', format: 'string' },
+    { key: 'airline', label: 'Airline', format: 'string' },
+    { key: 'baseFarePaise', label: 'Base Fare', format: 'paise' },
+    { key: 'taxesPaise', label: 'Taxes', format: 'paise' },
+    { key: 'markupPaise', label: 'Markup', format: 'paise' },
+    { key: 'commissionPaise', label: 'Commission', format: 'paise' },
+    { key: 'totalPaise', label: 'Total', format: 'paise' },
+    { key: 'status', label: 'Status', format: 'string' },
+  ];
+  const rows = docs.map((b) => {
+    const p = b.pricing;
+    return {
+      bookingDate: isoDate(b.createdAt),
+      travelDate: isoDate(b.travelDate),
+      agencyName: `${b.agencyName} (${b.agencyCode})`,
+      pnr: b.pnr || b.airlinePnr || '—',
+      ticketNo: (b.ticketNumbers ?? []).join(', ') || '—',
+      passenger: passengerName(b),
+      sector: b.sector,
+      airline: b.segments?.[0]?.airline?.code ?? '—',
+      baseFarePaise: p?.baseFarePaise ?? 0,
+      taxesPaise: p?.taxesPaise ?? 0,
+      markupPaise:
+        (p?.platformMarkupPaise ?? 0) +
+        (p?.distributorMarkupPaise ?? 0) +
+        (p?.agencyMarkupPaise ?? 0),
+      commissionPaise: p?.platformEarningsPaise ?? 0,
+      totalPaise: p?.agencyPayablePaise ?? 0,
+      status: b.status,
+    };
+  });
+  return finalize('BOOKING', columns, rows, q);
+}
+
+// ── Cancellation Report — cancelled / refunded bookings. ──
+async function runCancellation(ctx: ReportContext, q: ReportQuery): Promise<ReportResponse> {
+  const filter = scopeFilter(ctx, q, 'createdAt');
+  // Unless the caller picked a specific status, scope to the cancellation lifecycle.
+  if (!q.bookingStatus) {
+    filter.status = { $in: ['CANCEL_REQUESTED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED'] };
+  }
+  const docs = await Booking.find(filter).sort({ createdAt: -1 }).limit(ROW_LIMIT).lean();
+  const columns: ReportColumn[] = [
+    { key: 'bookingDate', label: 'Booking Date', format: 'date' },
+    { key: 'travelDate', label: 'Travel Date', format: 'date' },
+    { key: 'agencyName', label: 'Agency', format: 'string' },
+    { key: 'pnr', label: 'PNR', format: 'string' },
+    { key: 'sector', label: 'Sector', format: 'string' },
+    { key: 'airline', label: 'Airline', format: 'string' },
+    { key: 'totalPaise', label: 'Booking Total', format: 'paise' },
+    { key: 'status', label: 'Status', format: 'string' },
+  ];
+  const rows = docs.map((b) => ({
+    bookingDate: isoDate(b.createdAt),
+    travelDate: isoDate(b.travelDate),
+    agencyName: `${b.agencyName} (${b.agencyCode})`,
+    pnr: b.pnr || b.airlinePnr || '—',
+    sector: b.sector,
+    airline: b.segments?.[0]?.airline?.code ?? '—',
+    totalPaise: b.pricing?.agencyPayablePaise ?? 0,
+    status: b.status,
+  }));
+  return finalize('CANCELLATION', columns, rows, q);
+}
+
+// ── Commission Earned Report — per ticketed booking, platform commission. ──
+async function runCommission(ctx: ReportContext, q: ReportQuery): Promise<ReportResponse> {
+  const filter = scopeFilter(ctx, q, 'ticketedAt');
+  if (!q.bookingStatus) filter.status = { $in: EARNING_STATUSES };
+  const docs = await Booking.find(filter).sort({ ticketedAt: -1 }).limit(ROW_LIMIT).lean();
+  const columns: ReportColumn[] = [
+    { key: 'ticketedDate', label: 'Ticketed Date', format: 'date' },
+    { key: 'agencyName', label: 'Agency', format: 'string' },
+    { key: 'pnr', label: 'PNR', format: 'string' },
+    { key: 'sector', label: 'Sector', format: 'string' },
+    { key: 'airline', label: 'Airline', format: 'string' },
+    { key: 'baseFarePaise', label: 'Base Fare', format: 'paise' },
+    { key: 'commissionPaise', label: 'Commission Earned', format: 'paise' },
+    { key: 'gstPaise', label: 'GST', format: 'paise' },
+  ];
+  const rows = docs.map((b) => {
+    const p = b.pricing;
+    return {
+      ticketedDate: isoDate(b.ticketedAt ?? b.createdAt),
+      agencyName: `${b.agencyName} (${b.agencyCode})`,
+      pnr: b.pnr || b.airlinePnr || '—',
+      sector: b.sector,
+      airline: b.segments?.[0]?.airline?.code ?? '—',
+      baseFarePaise: p?.baseFarePaise ?? 0,
+      commissionPaise: p?.platformEarningsPaise ?? 0,
+      gstPaise: p?.gstPaise ?? 0,
+    };
+  });
+  return finalize('COMMISSION', columns, rows, q);
+}
+
+// ── Agency Ledger Report — wallet debits/credits in createdAt order. ──
+async function runLedger(ctx: ReportContext, q: ReportQuery): Promise<ReportResponse> {
+  const filter: Record<string, unknown> = { tenantId: new Types.ObjectId(ctx.tenantId) };
+  if (ctx.role === 'AGENCY' || ctx.role === 'SUB_AGENT') {
+    if (!ctx.agencyId) throw new AppError('FORBIDDEN');
+    filter.agencyId = new Types.ObjectId(ctx.agencyId);
+  } else if (ctx.role === 'DISTRIBUTOR') {
+    if (!ctx.distributorId) throw new AppError('FORBIDDEN');
+    filter.distributorId = new Types.ObjectId(ctx.distributorId);
+  } else if (q.agencyId) {
+    filter.agencyId = new Types.ObjectId(q.agencyId);
+  }
+  if (q.from || q.to) {
+    const range: Record<string, Date> = {};
+    if (q.from) range.$gte = q.from;
+    if (q.to) range.$lte = q.to;
+    filter.createdAt = range;
+  } else {
+    filter.createdAt = { $gte: new Date(Date.now() - 30 * DAY_MS) };
+  }
+  const txns = await WalletTransaction.find(filter).sort({ createdAt: -1 }).limit(ROW_LIMIT).lean();
+  const columns: ReportColumn[] = [
+    { key: 'date', label: 'Date', format: 'date' },
+    { key: 'txnId', label: 'Txn ID', format: 'string' },
+    { key: 'type', label: 'Type', format: 'string' },
+    { key: 'direction', label: 'Dr/Cr', format: 'string' },
+    { key: 'amountPaise', label: 'Amount', format: 'paise' },
+    { key: 'balancePaise', label: 'Balance After', format: 'paise' },
+    { key: 'description', label: 'Description', format: 'string' },
+  ];
+  const rows = txns.map((t) => ({
+    date: isoDate(t.createdAt),
+    txnId: t.txnId,
+    type: t.type,
+    direction: t.direction,
+    amountPaise: t.amount ?? 0,
+    balancePaise: t.balanceAfter ?? 0,
+    description: t.description ?? '—',
+  }));
+  return finalize('LEDGER', columns, rows, q);
 }
 
 function effectiveRange(q: ReportQuery): { from: Date | null; to: Date | null } {
@@ -388,6 +561,14 @@ function finalize(
 
 export async function runReport(ctx: ReportContext, q: ReportQuery): Promise<ReportResponse> {
   switch (q.type) {
+    case 'BOOKING':
+      return runBooking(ctx, q);
+    case 'CANCELLATION':
+      return runCancellation(ctx, q);
+    case 'COMMISSION':
+      return runCommission(ctx, q);
+    case 'LEDGER':
+      return runLedger(ctx, q);
     case 'SALES':
       return runSales(ctx, q);
     case 'AGENCY_PERFORMANCE':

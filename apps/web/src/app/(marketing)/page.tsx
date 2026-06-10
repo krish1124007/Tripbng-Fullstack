@@ -33,7 +33,10 @@ import {
 import { Badge, Button, Card } from '@/components/ui';
 import { CountUp } from './_components/count-up';
 import { Reveal } from './_components/reveal';
-import { FauxDashboard } from './_components/faux-dashboard';
+import { Canvas } from '@react-three/fiber';
+import { LaptopScene } from '@/components/3d/LaptopModel';
+import { MobileScene } from '@/components/3d/MobileModel';
+import { ScrollSection } from '@/components/animations/ScrollSection';
 
 export const dynamic = 'force-static';
 
@@ -41,15 +44,15 @@ export default function LandingPage() {
   return (
     <>
       <Hero />
-      <TrustStrip />
-      <Why />
-      <Flow />
-      <Network />
-      <Roles />
-      <Testimonials />
-      <MobileAppBand />
-      <Resources />
-      <Faq />
+      <ScrollSection parallax><TrustStrip /></ScrollSection>
+      <ScrollSection parallax><Why /></ScrollSection>
+      <ScrollSection parallax><Flow /></ScrollSection>
+      <ScrollSection parallax><Network /></ScrollSection>
+      <ScrollSection parallax><Roles /></ScrollSection>
+      <ScrollSection parallax><Testimonials /></ScrollSection>
+      <ScrollSection parallax><MobileAppBand /></ScrollSection>
+      <ScrollSection parallax><Resources /></ScrollSection>
+      <ScrollSection parallax><Faq /></ScrollSection>
       <FinalCta />
     </>
   );
@@ -153,8 +156,12 @@ function Hero() {
           </Reveal>
         </div>
 
-        <Reveal delay={120} className="lg:justify-self-end">
-          <FauxDashboard />
+        <Reveal delay={120} className="lg:justify-self-end w-full">
+          <div className="h-[600px] w-full lg:w-[800px] relative z-10 cursor-grab active:cursor-grabbing">
+            <Canvas shadows camera={{ position: [0, 0, 5], fov: 45 }}>
+              <LaptopScene />
+            </Canvas>
+          </div>
         </Reveal>
       </div>
     </section>
@@ -842,45 +849,12 @@ function MobileAppBand() {
               </Reveal>
             </div>
 
-            {/* Phone mockup — purely decorative, inline SVG-ish using divs */}
-            <Reveal delay={120} className="lg:justify-self-end">
-              <div className="relative mx-auto w-full max-w-[280px]">
-                <div className="relative aspect-[9/19] rounded-[2.2rem] border-[8px] border-black/80 bg-gradient-to-br from-brand-50 via-white to-accent-50/40 shadow-2xl">
-                  <span aria-hidden className="absolute left-1/2 top-0 z-10 h-5 w-20 -translate-x-1/2 rounded-b-2xl bg-black/80" />
-                  <div className="absolute inset-0 overflow-hidden rounded-[1.5rem] p-4 pt-8">
-                    <div className="mt-3 flex items-center justify-between">
-                      <p className="font-mono text-[10px] text-ink-3">9:41</p>
-                      <span className="rounded-full bg-brand-500 px-1.5 py-0.5 text-[8px] font-bold text-white">LIVE</span>
-                    </div>
-                    <h3 className="mt-3 text-base font-bold text-ink-1">Search flights</h3>
-                    <div className="mt-3 space-y-2">
-                      <div className="rounded-lg border bg-white px-3 py-2">
-                        <p className="font-mono text-[9px] uppercase tracking-wider text-ink-4">From</p>
-                        <p className="text-xs font-bold text-ink-1">BOM · Mumbai</p>
-                      </div>
-                      <div className="rounded-lg border bg-white px-3 py-2">
-                        <p className="font-mono text-[9px] uppercase tracking-wider text-ink-4">To</p>
-                        <p className="text-xs font-bold text-ink-1">DEL · Delhi</p>
-                      </div>
-                      <button className="mt-2 w-full rounded-lg bg-gradient-to-r from-brand-600 to-brand-700 py-2 text-[11px] font-bold text-white shadow">
-                        Search →
-                      </button>
-                    </div>
-                    <div className="mt-3 space-y-1.5">
-                      <div className="rounded-md border bg-white p-2">
-                        <div className="flex items-center justify-between">
-                          <p className="font-mono text-[9px] font-bold text-brand-600">6E 5081</p>
-                          <span className="rounded-full bg-brand-100 px-1 py-0.5 text-[7px] font-bold text-brand-700">Cheapest</span>
-                        </div>
-                        <p className="mt-0.5 font-mono text-[11px] font-bold text-ink-1">₹4,289</p>
-                      </div>
-                      <div className="rounded-md border bg-white p-2">
-                        <p className="font-mono text-[9px] font-bold text-brand-600">AI 887</p>
-                        <p className="mt-0.5 font-mono text-[11px] font-bold text-ink-1">₹4,612</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            {/* 3D Phone mockup */}
+            <Reveal delay={120} className="lg:justify-self-end w-full">
+              <div className="h-[600px] w-full lg:w-[400px] relative z-10 cursor-grab active:cursor-grabbing mx-auto">
+                <Canvas shadows camera={{ position: [0, 0, 5], fov: 45 }}>
+                  <MobileScene />
+                </Canvas>
               </div>
             </Reveal>
           </div>

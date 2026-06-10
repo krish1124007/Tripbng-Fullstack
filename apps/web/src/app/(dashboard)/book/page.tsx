@@ -174,6 +174,56 @@ function BookFlow() {
     return Object.keys(out).length === 0 ? undefined : out;
   }, [ssrSelections, baggageSelections, seatSelections]);
 
+  // Per-segment maps for the SSR / baggage / seat pickers. MEMOIZED so their
+  // object identity is stable across renders — the pickers' bubble-up effects
+  // depend on `segmentRouting`, so passing a fresh object every render caused an
+  // infinite update loop (select seat → re-render → new object → effect → setState → …).
+  const segmentRouting = useMemo(
+    () =>
+      Object.fromEntries(
+        (result?.segments ?? []).map((s) => [
+          `${s.origin.code}-${s.destination.code}`,
+          {
+            airlineCode: s.flightNumber?.slice(0, 2),
+            flightNumber: s.flightNumber,
+            wayType: 1 as const,
+            origin: s.origin.code,
+            destination: s.destination.code,
+          },
+        ]),
+      ),
+    [result],
+  );
+  const segmentSchedule = useMemo(
+    () =>
+      Object.fromEntries(
+        (result?.segments ?? []).map((s) => {
+          const dep = new Date(s.departure);
+          const pretty = dep.toLocaleString('en-IN', {
+            weekday: 'short',
+            day: '2-digit',
+            month: 'short',
+            year: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          });
+          return [`${s.origin.code}-${s.destination.code}`, pretty.replace(',', '')];
+        }),
+      ),
+    [result],
+  );
+  const segmentCities = useMemo(
+    () =>
+      Object.fromEntries(
+        (result?.segments ?? []).map((s) => [
+          `${s.origin.code}-${s.destination.code}`,
+          { origin: s.origin.name, destination: s.destination.name },
+        ]),
+      ),
+    [result],
+  );
+
   // Reprice — for eTrav fares we re-validate price + availability before booking.
   // For other suppliers the backend route returns a synthetic "no change" response
   // so the rest of the flow can call this uniformly.
@@ -1045,49 +1095,9 @@ function BookFlow() {
                       label: namePart || `${t === 'INFANT' ? 'Infant' : t === 'CHILD' ? 'Child' : 'Adult'} #${i + 1}`,
                     };
                   })}
-                  segmentRouting={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      return [
-                        segId,
-                        {
-                          airlineCode: s.flightNumber?.slice(0, 2),
-                          flightNumber: s.flightNumber,
-                          wayType: 1,
-                          origin: s.origin.code,
-                          destination: s.destination.code,
-                        },
-                      ];
-                    }),
-                  )}
-                  segmentSchedule={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      const dep = new Date(s.departure);
-                      const pretty = dep.toLocaleString('en-IN', {
-                        weekday: 'short',
-                        day: '2-digit',
-                        month: 'short',
-                        year: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                      });
-                      return [segId, pretty.replace(',', '')];
-                    }),
-                  )}
-                  segmentCities={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      return [
-                        segId,
-                        {
-                          origin: s.origin.name,
-                          destination: s.destination.name,
-                        },
-                      ];
-                    }),
-                  )}
+                  segmentRouting={segmentRouting}
+                  segmentSchedule={segmentSchedule}
+                  segmentCities={segmentCities}
                   onChange={setBaggageSelections}
                 />
 
@@ -1106,49 +1116,9 @@ function BookFlow() {
                       label: namePart || `${t === 'INFANT' ? 'Infant' : t === 'CHILD' ? 'Child' : 'Adult'} #${i + 1}`,
                     };
                   })}
-                  segmentRouting={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      return [
-                        segId,
-                        {
-                          airlineCode: s.flightNumber?.slice(0, 2),
-                          flightNumber: s.flightNumber,
-                          wayType: 1,
-                          origin: s.origin.code,
-                          destination: s.destination.code,
-                        },
-                      ];
-                    }),
-                  )}
-                  segmentCities={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      return [
-                        segId,
-                        {
-                          origin: s.origin.name,
-                          destination: s.destination.name,
-                        },
-                      ];
-                    }),
-                  )}
-                  segmentSchedule={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      const dep = new Date(s.departure);
-                      const pretty = dep.toLocaleString('en-IN', {
-                        weekday: 'short',
-                        day: '2-digit',
-                        month: 'short',
-                        year: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                      });
-                      return [segId, pretty.replace(',', '')];
-                    }),
-                  )}
+                  segmentRouting={segmentRouting}
+                  segmentCities={segmentCities}
+                  segmentSchedule={segmentSchedule}
                   onChange={setSeatSelections}
                 />
 
@@ -1169,24 +1139,7 @@ function BookFlow() {
                       label: namePart || `${t === 'INFANT' ? 'Infant' : t === 'CHILD' ? 'Child' : 'Adult'} #${i + 1}`,
                     };
                   })}
-                  segmentRouting={Object.fromEntries(
-                    result.segments.map((s) => {
-                      const segId = `${s.origin.code}-${s.destination.code}`;
-                      return [
-                        segId,
-                        {
-                          airlineCode: s.flightNumber?.slice(0, 2),
-                          flightNumber: s.flightNumber,
-                          // Wire wayType=1 for outbound, =2 for return-leg segments
-                          // when a returnDate exists. Multi-city: all marked outbound;
-                          // TBO accepts that for non-RT pathways.
-                          wayType: 1,
-                          origin: s.origin.code,
-                          destination: s.destination.code,
-                        },
-                      ];
-                    }),
-                  )}
+                  segmentRouting={segmentRouting}
                   onChange={setSsrSelections}
                 />
 

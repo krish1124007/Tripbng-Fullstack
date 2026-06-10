@@ -1,7 +1,8 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useParams } from 'next/navigation';
 import { ArrowLeft, Clock, Plane, Receipt, ShieldCheck, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PublicBooking } from '@tripbng/shared';
@@ -30,8 +31,9 @@ import { downloadAuthenticatedFile } from '@/lib/download';
 import { formatPaiseAsINR } from '@/lib/money';
 import { ApiCallError } from '@/lib/api';
 
-export default function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function BookingDetailPage() {
+  const params = useParams<{ id: string }>();
+  const id = params?.id ?? '';
   const accessToken = useAuthStore((s) => s.accessToken);
   const booking = useApiQuery<PublicBooking>(['booking', id], `/api/v1/bookings/${id}`);
   const invalidate = useInvalidateOnSuccess([['bookings'], ['booking', id]]);

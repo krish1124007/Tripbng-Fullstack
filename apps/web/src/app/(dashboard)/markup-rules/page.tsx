@@ -2,41 +2,121 @@
 
 import { useMemo, useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
-import { MoreHorizontal, Plus } from 'lucide-react';
+import { Copy, Download, MoreHorizontal, Plus, RotateCcw, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PublicMarkupRule } from '@tripbng/shared';
 import {
   Badge,
   Button,
+  Card,
   ConfirmDialog,
   DataTable,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  FormField,
   Input,
   PageHeader,
   Pagination,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   StatusBadge,
 } from '@/components/ui';
 import { useApiMutation, useApiPaginatedQuery, useInvalidateOnSuccess } from '@/lib/api-client';
+import { apiFetchEnvelope } from '@/lib/api';
+import { useAuthStore } from '@/lib/auth-store';
 import { formatPaiseAsINR, formatPercentBasisPoints } from '@/lib/money';
 import { MarkupRuleDrawer } from './_markup-rule-drawer';
 
-export default function MarkupRulesPage() {
+// Curated carrier list for the Airline filter dropdown (IATA code → name).
+const AIRLINES: { code: string; name: string }[] = [
+  { code: '6E', name: 'IndiGo' },
+  { code: 'AI', name: 'Air India' },
+  { code: 'UK', name: 'Vistara' },
+  { code: 'SG', name: 'SpiceJet' },
+  { code: 'QP', name: 'Akasa Air' },
+  { code: 'IX', name: 'Air India Express' },
+  { code: 'G8', name: 'Go First' },
+  { code: 'I5', name: 'AIX Connect' },
+];
+const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
+  AIRLINES.map((a) => [a.code, a.name]),
+);
+
+const ALL = '__ALL__';
+
+const dtf = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+});
+function formatDateTime(iso: string): string {
+  try {
+    return dtf.format(new Date(iso)).replace(',', ' |');
+  } catch {
+    return '—';
+  }
+}
+
+interface Filters {
+  q: string;
+  airline: string;
+  travelType: string;
+  paxType: string;
+  status: string;
+}
+const EMPTY_FILTERS: Filters = {
+  q: '',
+  airline: ALL,
+  travelType: ALL,
+  paxType: ALL,
+  status: ALL,
+};
+
+export default function AgencyMarkupPage() {
+  const accessToken = useAuthStore((s) => s.accessToken);
   const [page, setPage] = useState(1);
-  const [q, setQ] = useState('');
+  // `draft` = what's in the search form; `applied` = what's committed to the query.
+  const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS);
+  const [applied, setApplied] = useState<Filters>(EMPTY_FILTERS);
+
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<PublicMarkupRule | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PublicMarkupRule | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const queryParams = useMemo(
+    () => ({
+      page,
+      limit: 20,
+      q: applied.q || undefined,
+      airline: applied.airline === ALL ? undefined : applied.airline,
+      travelType: applied.travelType === ALL ? undefined : applied.travelType,
+      paxType: applied.paxType === ALL ? undefined : applied.paxType,
+      status: applied.status === ALL ? undefined : applied.status,
+    }),
+    [page, applied],
+  );
 
   const list = useApiPaginatedQuery<PublicMarkupRule>(
-    ['markup-rules', { page, q }],
+    ['markup-rules', queryParams],
     '/api/v1/markup-rules',
-    { query: { page, limit: 20, q: q || undefined } },
+    { query: queryParams },
   );
 
   const invalidate = useInvalidateOnSuccess([['markup-rules']]);
+  const rows = list.data?.data ?? [];
+  const total = list.data?.meta.total ?? 0;
+
   const remove = useApiMutation<{ id: string }, { ok: true }>(
     (i) => `/api/v1/markup-rules/${i.id}`,
     'DELETE',
@@ -48,15 +128,145 @@ export default function MarkupRulesPage() {
       onError: (err) => toast.error(err.message),
     },
   );
+  const clone = useApiMutation<{ id: string }, PublicMarkupRule>(
+    (i) => `/api/v1/markup-rules/${i.id}/clone`,
+    'POST',
+    {
+      onSuccess: () => {
+        toast.success('Rule cloned (paused copy created)');
+        invalidate();
+      },
+      onError: (err) => toast.error(err.message),
+    },
+  );
+
+  function runSearch() {
+    setPage(1);
+    setSelected(new Set());
+    setApplied(draft);
+  }
+  function resetSearch() {
+    setPage(1);
+    setSelected(new Set());
+    setDraft(EMPTY_FILTERS);
+    setApplied(EMPTY_FILTERS);
+  }
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelected((prev) =>
+      prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id)),
+    );
+  }
+
+  async function bulkDelete() {
+    const ids = Array.from(selected);
+    await Promise.allSettled(ids.map((id) => remove.mutateAsync({ id })));
+    setSelected(new Set());
+    setBulkDeleteOpen(false);
+  }
+
+  async function downloadExcel() {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({ page: '1', limit: '200' });
+      if (applied.q) params.set('q', applied.q);
+      if (applied.airline !== ALL) params.set('airline', applied.airline);
+      if (applied.travelType !== ALL) params.set('travelType', applied.travelType);
+      if (applied.paxType !== ALL) params.set('paxType', applied.paxType);
+      if (applied.status !== ALL) params.set('status', applied.status);
+      const { data } = await apiFetchEnvelope<PublicMarkupRule[]>(
+        `/api/v1/markup-rules?${params.toString()}`,
+        { accessToken },
+      );
+      const header = [
+        'Description',
+        'Created Date',
+        'Airline',
+        'Travel Type',
+        'Pax Type',
+        'Value',
+        'Scope',
+        'Priority',
+        'Last Updated Date',
+        'Status',
+      ];
+      const csvRows = data.map((r) => {
+        const c = r.conditions ?? {};
+        const value =
+          r.valueType === 'FLAT'
+            ? formatPaiseAsINR(r.value, { compact: true })
+            : formatPercentBasisPoints(r.value);
+        return [
+          r.name,
+          formatDateTime(r.createdAt),
+          c.airlines?.length ? c.airlines.join(' ') : 'All',
+          c.travelType ?? 'All',
+          c.paxTypes?.length ? c.paxTypes.join(' ') : 'All',
+          value,
+          r.scope,
+          String(r.priority),
+          formatDateTime(r.updatedAt),
+          r.status,
+        ];
+      });
+      const csv = [header, ...csvRows]
+        .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agency-markup-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${data.length} rule${data.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const allChecked = rows.length > 0 && selected.size === rows.length;
 
   const columns = useMemo<ColumnDef<PublicMarkupRule, unknown>[]>(
     () => [
       {
-        header: 'Rule',
+        id: 'select',
+        header: () => (
+          <input
+            type="checkbox"
+            aria-label="Select all"
+            className="h-4 w-4 cursor-pointer rounded border-ink-4 accent-accent"
+            checked={allChecked}
+            onChange={toggleAll}
+          />
+        ),
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            aria-label={`Select ${row.original.name}`}
+            className="h-4 w-4 cursor-pointer rounded border-ink-4 accent-accent"
+            checked={selected.has(row.original.id)}
+            onChange={() => toggleRow(row.original.id)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+      },
+      {
+        header: 'Description',
         accessorKey: 'name',
         cell: ({ row }) => (
           <div className="flex flex-col">
-            <span className="text-sm text-ink-1">{row.original.name}</span>
+            <span className="font-medium text-ink-1">{row.original.name}</span>
             {row.original.notes ? (
               <span className="text-xs text-ink-3">{row.original.notes}</span>
             ) : null}
@@ -64,13 +274,40 @@ export default function MarkupRulesPage() {
         ),
       },
       {
-        header: 'Scope',
-        accessorKey: 'scope',
-        cell: ({ getValue }) => {
-          const v = getValue() as string;
-          const variant =
-            v === 'PLATFORM' ? 'info' : v === 'DISTRIBUTOR' ? 'accent' : 'neutral';
-          return <Badge variant={variant}>{v}</Badge>;
+        header: 'Created Date',
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-xs text-ink-2">
+            {formatDateTime(row.original.createdAt)}
+          </span>
+        ),
+      },
+      {
+        header: 'Airline',
+        cell: ({ row }) => {
+          const al = row.original.conditions?.airlines ?? [];
+          if (al.length === 0) return <span className="text-xs text-ink-3">All</span>;
+          return (
+            <div className="flex flex-wrap gap-1">
+              {al.map((c) => (
+                <Badge key={c} variant="outline" className="font-mono text-[10px]">
+                  {AIRLINE_NAME[c] ?? c}
+                </Badge>
+              ))}
+            </div>
+          );
+        },
+      },
+      {
+        header: 'Travel Type',
+        cell: ({ row }) => (
+          <span className="text-xs text-ink-2">{row.original.conditions?.travelType ?? 'All'}</span>
+        ),
+      },
+      {
+        header: 'Pax Type',
+        cell: ({ row }) => {
+          const px = row.original.conditions?.paxTypes ?? [];
+          return <span className="text-xs text-ink-2">{px.length ? px.join(', ') : 'All'}</span>;
         },
       },
       {
@@ -80,50 +317,39 @@ export default function MarkupRulesPage() {
             {row.original.valueType === 'FLAT'
               ? formatPaiseAsINR(row.original.value, { compact: true })
               : formatPercentBasisPoints(row.original.value)}
-            {row.original.maxValuePaise != null
-              ? ` (cap ${formatPaiseAsINR(row.original.maxValuePaise, { compact: true })})`
-              : ''}
           </span>
         ),
       },
       {
-        header: 'Conditions',
-        cell: ({ row }) => {
-          const c = row.original.conditions ?? {};
-          const tags: string[] = [];
-          if (c.airlines && c.airlines.length > 0) tags.push(`AL: ${c.airlines.join(',')}`);
-          if (c.travelType) tags.push(c.travelType);
-          if (c.travelClass) tags.push(c.travelClass);
-          if (c.paxTypes && c.paxTypes.length > 0) tags.push(c.paxTypes.join(','));
-          if (c.origins && c.origins.length > 0) tags.push(`O: ${c.origins.join(',')}`);
-          if (c.destinations && c.destinations.length > 0)
-            tags.push(`D: ${c.destinations.join(',')}`);
-          if (tags.length === 0) return <span className="text-xs text-ink-3">All</span>;
-          return (
-            <div className="flex flex-wrap gap-1">
-              {tags.slice(0, 3).map((t) => (
-                <Badge key={t} variant="outline" className="font-mono text-[10px]">
-                  {t}
-                </Badge>
-              ))}
-              {tags.length > 3 ? (
-                <span className="text-xs text-ink-3">+{tags.length - 3}</span>
-              ) : null}
-            </div>
-          );
-        },
-      },
-      {
-        header: 'Priority',
-        accessorKey: 'priority',
-        cell: ({ getValue }) => (
-          <span className="font-mono text-xs tabular-nums text-ink-2">{getValue() as number}</span>
+        header: 'Last Updated Date',
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-xs text-ink-2">
+            {formatDateTime(row.original.updatedAt)}
+          </span>
         ),
       },
       {
         header: 'Status',
         accessorKey: 'status',
         cell: ({ getValue }) => <StatusBadge status={getValue() as string} />,
+      },
+      {
+        header: 'Clone',
+        id: 'clone',
+        cell: ({ row }) => (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Clone rule"
+            title="Duplicate this rule"
+            onClick={(e) => {
+              e.stopPropagation();
+              clone.mutate({ id: row.original.id });
+            }}
+          >
+            <Copy className="h-4 w-4" />
+          </Button>
+        ),
       },
       {
         header: '',
@@ -143,6 +369,9 @@ export default function MarkupRulesPage() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setEditTarget(row.original)}>Edit</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => clone.mutate({ id: row.original.id })}>
+                  Clone
+                </DropdownMenuItem>
                 <DropdownMenuItem destructive onClick={() => setDeleteTarget(row.original)}>
                   Delete
                 </DropdownMenuItem>
@@ -152,43 +381,131 @@ export default function MarkupRulesPage() {
         ),
       },
     ],
-    [],
+    [allChecked, selected, clone],
   );
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Pricing"
-        title="Markup rules"
-        description="Visual conditions stack on top of policy. Lowest priority wins per scope."
+        title="Agency Markup"
+        description="Margin added to supplier base fares before they're shown to agents. Filter by airline, travel type, pax, or status."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New rule
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={downloadExcel} disabled={exporting || total === 0}>
+              <Download className="h-4 w-4" /> {exporting ? 'Exporting…' : 'Download as Excel'}
+            </Button>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> Create Markup
+            </Button>
+          </div>
         }
       />
 
-      <Input
-        placeholder="Search by name"
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
-          setPage(1);
-        }}
-        className="max-w-sm"
-      />
+      {/* Search filters */}
+      <Card className="p-4">
+        <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
+          <FormField label="Description">
+            <Input
+              placeholder="Rule name / keyword"
+              value={draft.q}
+              onChange={(e) => setDraft((d) => ({ ...d, q: e.target.value }))}
+              onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+            />
+          </FormField>
+          <FormField label="Airline Name">
+            <Select value={draft.airline} onValueChange={(v) => setDraft((d) => ({ ...d, airline: v }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All airlines</SelectItem>
+                {AIRLINES.map((a) => (
+                  <SelectItem key={a.code} value={a.code}>
+                    {a.name} ({a.code})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="Travel Type">
+            <Select
+              value={draft.travelType}
+              onValueChange={(v) => setDraft((d) => ({ ...d, travelType: v }))}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All</SelectItem>
+                <SelectItem value="DOMESTIC">Domestic</SelectItem>
+                <SelectItem value="INTERNATIONAL">International</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="Pax Type">
+            <Select value={draft.paxType} onValueChange={(v) => setDraft((d) => ({ ...d, paxType: v }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All</SelectItem>
+                <SelectItem value="ADULT">Adult</SelectItem>
+                <SelectItem value="CHILD">Child</SelectItem>
+                <SelectItem value="INFANT">Infant</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="Status">
+            <Select value={draft.status} onValueChange={(v) => setDraft((d) => ({ ...d, status: v }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All</SelectItem>
+                <SelectItem value="ACTIVE">Active</SelectItem>
+                <SelectItem value="PAUSED">Paused</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+        </div>
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <Button variant="ghost" onClick={resetSearch}>
+            <RotateCcw className="h-4 w-4" /> Reset
+          </Button>
+          <Button onClick={runSearch}>
+            <Search className="h-4 w-4" /> Search
+          </Button>
+        </div>
+      </Card>
+
+      {/* Bulk action bar */}
+      {selected.size > 0 ? (
+        <div className="flex items-center justify-between rounded-lg border bg-surface-2 px-4 py-2">
+          <span className="text-sm text-ink-2">{selected.size} selected</span>
+          <Button variant="danger" size="sm" onClick={() => setBulkDeleteOpen(true)}>
+            Delete selected
+          </Button>
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-ink-3">
+          Showing {rows.length} out of {total}
+        </span>
+      </div>
 
       <DataTable
         columns={columns}
-        data={list.data?.data ?? []}
+        data={rows}
         loading={list.isLoading}
-        empty="No markup rules yet."
+        empty="No Data Found"
       />
 
       <Pagination
         page={page}
         totalPages={list.data?.meta.totalPages ?? 1}
-        total={list.data?.meta.total ?? 0}
+        total={total}
         onPageChange={setPage}
       />
 
@@ -209,6 +526,15 @@ export default function MarkupRulesPage() {
         onConfirm={async () => {
           if (deleteTarget) await remove.mutateAsync({ id: deleteTarget.id });
         }}
+      />
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title={`Delete ${selected.size} selected rule${selected.size === 1 ? '' : 's'}?`}
+        description="This is immediate and cannot be undone."
+        confirmLabel="Delete selected"
+        destructive
+        onConfirm={bulkDelete}
       />
     </div>
   );
