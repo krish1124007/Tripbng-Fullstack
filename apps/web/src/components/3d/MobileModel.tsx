@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+
 import { Html, ContactShadows, PresentationControls, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 
