@@ -459,25 +459,7 @@ supplierRouter.post(
         ...input,
         createdBy: req.auth!.userId,
       });
-<<<<<<< HEAD
       await invalidateSearchCache(req.auth!.tenantId);
-=======
-      await recordAudit({
-        tenantId: req.auth!.tenantId,
-        actorId: req.auth!.userId,
-        actorRole: req.auth!.role,
-        action: 'supplier.source.create',
-        resource: 'supplierSource',
-        resourceId: String(src._id),
-        after: {
-          name: src.name,
-          supplierId: String(src.supplierId),
-          productType: src.productType,
-          travelType: src.travelType,
-        },
-        ip: req.ip ?? null,
-      });
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       return created(res, { id: String(src._id) });
     } catch (err) {
       next(err);
@@ -520,21 +502,7 @@ supplierRouter.patch(
         { new: true },
       );
       if (!src) throw new AppError('NOT_FOUND');
-<<<<<<< HEAD
       await invalidateSearchCache(req.auth!.tenantId);
-=======
-      await recordAudit({
-        tenantId: req.auth!.tenantId,
-        actorId: req.auth!.userId,
-        actorRole: req.auth!.role,
-        action: 'supplier.source.update',
-        resource: 'supplierSource',
-        resourceId: String(src._id),
-        before: { status: before.status, airlineCodes: before.airlineCodes },
-        after: { status: src.status, airlineCodes: src.airlineCodes },
-        ip: req.ip ?? null,
-      });
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       return ok(res, { id: String(src._id) });
     } catch (err) {
       next(err);
@@ -553,20 +521,7 @@ supplierRouter.delete(
         tenantId: req.auth!.tenantId,
       });
       if (!src) throw new AppError('NOT_FOUND');
-<<<<<<< HEAD
       await invalidateSearchCache(req.auth!.tenantId);
-=======
-      await recordAudit({
-        tenantId: req.auth!.tenantId,
-        actorId: req.auth!.userId,
-        actorRole: req.auth!.role,
-        action: 'supplier.source.delete',
-        resource: 'supplierSource',
-        resourceId: String(src._id),
-        before: { name: src.name, supplierId: String(src.supplierId) },
-        ip: req.ip ?? null,
-      });
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       return ok(res, { ok: true });
     } catch (err) {
       next(err);

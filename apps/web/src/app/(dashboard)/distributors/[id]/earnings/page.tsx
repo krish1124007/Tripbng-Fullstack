@@ -37,21 +37,9 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-<<<<<<< HEAD
 export default function DistributorEarningsPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? '';
-=======
-// Next.js 14: `params` is a plain object, not a Promise. Using
-// React.use(params) here was a Next-15-only idiom that crashed at
-// runtime with "An unsupported type was passed to use()".
-export default function DistributorEarningsPage({
-  params,
-}: {
-  params: { id: string };
-}) {
-  const { id } = params;
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 
   const [from, setFrom] = useState(dateMinusDays(30));
   const [to, setTo] = useState(todayStr());

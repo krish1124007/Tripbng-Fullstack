@@ -169,7 +169,6 @@ export async function apiFetchEnvelope<T>(
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   } catch (err) {
-<<<<<<< HEAD
     clearTimeout(timer);
     const elapsed = Date.now() - startedAt;
     // Caller-initiated cancellation (React Query) — not an error, re-throw quietly.
@@ -183,37 +182,10 @@ export async function apiFetchEnvelope<T>(
       );
     }
     // Browser-level failure: CORS rejection, DNS, server down, network offline.
-=======
-    // Browser-level failure — fetch() threw before any response was
-    // received. The browser logs the underlying reason to the console
-    // but won't share it with us; the most common causes (in priority
-    // order) are:
-    //
-    //   1. CORS preflight blocked
-    //      The API server doesn't include this origin in its
-    //      `CORS_ORIGINS` allowlist, so the OPTIONS preflight comes
-    //      back without `Access-Control-Allow-Origin` and the browser
-    //      refuses the actual request. Symptom: DevTools Network tab
-    //      shows "Provisional headers are shown" + empty Response
-    //      Headers, no entry under /api/v1/auth/login.
-    //
-    //   2. API host unreachable
-    //      DNS resolution failure, the API process is down, nginx is
-    //      misconfigured, or the TLS cert is invalid / self-signed.
-    //      Quick check: open `${API_BASE}/healthz` directly in a new
-    //      tab — if that fails too, the issue is infrastructure
-    //      rather than CORS.
-    //
-    //   3. Mixed content
-    //      Frontend served over HTTPS calling an HTTP API. Browser
-    //      blocks it silently. Production should always be HTTPS-only
-    //      on both sides.
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
     const reason = err instanceof Error ? err.message : 'Unknown network error';
     logApiError('NETWORK_ERROR', { method, url, apiBase: API_BASE, afterMs: elapsed, reason }, err);
     throw new ApiCallError(
       'NETWORK_ERROR',
-<<<<<<< HEAD
       `Cannot reach API at ${API_BASE} — ${reason} (${method} ${path})`,
       { apiBase: API_BASE, path, method, reason },
     );
@@ -242,12 +214,6 @@ export async function apiFetchEnvelope<T>(
       `Server returned ${res.status} ${res.statusText || ''} with a non-JSON body (${method} ${path}).`,
       { status: res.status, bodyPreview: raw.slice(0, 800) },
       res.status,
-=======
-      `Cannot reach API at ${API_BASE} — ${reason}. ` +
-        `Likely causes: (1) the API's CORS_ORIGINS env var doesn't include "${typeof window !== 'undefined' ? window.location.origin : 'this site'}", ` +
-        `(2) ${API_BASE} isn't reachable (try opening ${API_BASE}/healthz in a new tab).`,
-      { apiBase: API_BASE, path },
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
     );
   }
 

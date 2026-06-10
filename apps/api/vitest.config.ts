@@ -24,19 +24,8 @@ export default defineConfig({
       REDIS_URL: process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6380/1',
       JWT_ACCESS_SECRET: 'test-test-test-test-test-test-test-test-test-test',
       JWT_REFRESH_SECRET: 'test-refresh-test-refresh-test-refresh-test-refresh',
-<<<<<<< HEAD
       // Disable the 4h free-void window in tests so the cancellation-fee path
       // (fare-rule bands) is actually exercised. Production keeps the 4h default.
-=======
-      // Set at vitest.config level so the env module picks it up before any
-      // test imports. /internal/* auth middleware reads this.
-      INTERNAL_API_KEY: 'test-internal-key-min-32-chars-xxxxx',
-      // Tests cancel bookings ~0ms after ticketing and assert the fare-rule
-      // cancellation fee was applied. With the production default of 4h, every
-      // such cancel falls inside the free-void window and the fee is skipped.
-      // Disable the void window in tests so fee behaviour is deterministic;
-      // tests targeting the void-window behaviour itself can override per-test.
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
       TRIPBNG_FLIGHT_VOID_WINDOW_HOURS: '0',
     },
   },

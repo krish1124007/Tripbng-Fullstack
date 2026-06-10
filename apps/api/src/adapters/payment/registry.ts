@@ -14,7 +14,6 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { getActiveConfig } from '../../services/payment/payment-config.service.js';
-<<<<<<< HEAD
 import {
   IciciEazypayProvider,
   type IciciEazypayConfig,
@@ -25,13 +24,6 @@ import {
   type OrangePgConfig,
   type OrangePgCredentials,
 } from './orange-pg.provider.js';
-=======
-import { IciciOrangePgProvider } from './icici-orange-pg/index.js';
-import type {
-  IciciOrangePgConfig,
-  IciciOrangePgCredentials,
-} from './icici-orange-pg/types.js';
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 import { ManualProvider } from './manual.provider.js';
 import { PhonePeProvider, type PhonePeConfig, type PhonePeCredentials } from './phonepe.provider.js';
 import {

@@ -17,19 +17,8 @@ import { Policy } from '../models/Policy.js';
 import { priceFare, type PricingMarkupRule } from './pricing/index.js';
 import { Agency } from '../models/Agency.js';
 import { Actor, EVENTS, track } from './analytics.service.js';
-<<<<<<< HEAD
 import { airlineAllowed, resolveSupplierAccess } from './supplier-access/index.js';
 import { SEARCH_REQ_PREFIX } from './search-cache.js';
-=======
-import { applyMapSourceFilter } from './search/map-source-filter.service.js';
-import { deriveTravelType } from '../data/airports.js';
-import {
-  applyMapPolicyToBreakdown,
-  logMapPolicyApplied,
-  resolveMapPolicy,
-  resolveSupplierCommissionPaise,
-} from './pricing/map-policy-pricing.service.js';
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 
 const CACHE_TTL_SECONDS = 60 * 5;
 
@@ -331,7 +320,6 @@ export async function searchFlights(
 
   const bookingDate = new Date();
   const priced: SearchResult[] = [];
-<<<<<<< HEAD
   for (const opt of fanout.options) {
     // Airline restriction (Module 3, rule 3) — a matched mapping/source may
     // limit a supplier to an airline allow-list. Drop options whose carrier
@@ -339,12 +327,6 @@ export async function searchFlights(
     const decision = access.byCode[opt.supplierCode];
     const airline = opt.segments[0]?.airline.code;
     if (decision && airline && !airlineAllowed(decision, airline)) continue;
-=======
-  // Phase 8 — Map Policy adjustment. Cache commission-percent lookups by
-  // policyId so 50 options sharing one Policy don't trigger 50 queries.
-  const commissionPctCache = new Map<string, number>();
-  for (const opt of filtered.options) {
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
     try {
       const result = await priceOption(opt, ctx, pricingCtx, request, bookingDate);
       const adjusted = await maybeApplyMapPolicy(

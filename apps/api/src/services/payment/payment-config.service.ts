@@ -18,11 +18,7 @@ export interface RawConfigWithCredentials<T = Record<string, unknown>> {
  *  log-traced so audit can prove access. */
 export async function getActiveConfig<T = Record<string, unknown>>(
   tenantId: string,
-<<<<<<< HEAD
   providerCode: 'ICICI_EAZYPAY' | 'ORANGE_PG' | 'PHONEPE' | 'RAZORPAY',
-=======
-  providerCode: 'ICICI_ORANGE_PG' | 'PHONEPE',
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
   environment: 'UAT' | 'PROD',
 ): Promise<RawConfigWithCredentials<T> | null> {
   const cfg = await PaymentGatewayConfig.findOne({

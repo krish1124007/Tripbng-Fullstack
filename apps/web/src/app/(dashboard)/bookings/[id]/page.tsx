@@ -2,22 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-<<<<<<< HEAD
 import { useParams } from 'next/navigation';
 import { ArrowLeft, Clock, Plane, Receipt, ShieldCheck, X } from 'lucide-react';
-=======
-import {
-  ArrowLeft,
-  Bus as BusIcon,
-  Clock,
-  Hotel as HotelIcon,
-  Plane,
-  Receipt,
-  ShieldCheck,
-  StickyNote as VisaIcon,
-  X,
-} from 'lucide-react';
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 import { toast } from 'sonner';
 import type { PublicBooking } from '@tripbng/shared';
 import {
@@ -46,17 +32,9 @@ import { downloadAuthenticatedFile } from '@/lib/download';
 import { formatPaiseAsINR } from '@/lib/money';
 import { ApiCallError } from '@/lib/api';
 
-<<<<<<< HEAD
 export default function BookingDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? '';
-=======
-// Next.js 14: `params` is a plain object, not a Promise. Don't wrap with
-// React.use() — that's a Next 15 idiom and crashes here with
-// "An unsupported type was passed to use(): [object Object]".
-export default function BookingDetailPage({ params }: { params: { id: string } }) {
-  const { id } = params;
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
   const accessToken = useAuthStore((s) => s.accessToken);
   const booking = useApiQuery<PublicBooking>(['booking', id], `/api/v1/bookings/${id}`);
   const invalidate = useInvalidateOnSuccess([['bookings'], ['booking', id]]);

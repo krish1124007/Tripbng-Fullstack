@@ -44,11 +44,7 @@ import { useAuthStore } from '@/lib/auth-store';
 import { formatPaiseAsINR } from '@/lib/money';
 import { cn } from '@/lib/utils';
 
-<<<<<<< HEAD
 type ProviderCode = 'ICICI_EAZYPAY' | 'ORANGE_PG' | 'PHONEPE';
-=======
-type ProviderCode = 'PHONEPE';
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
 
 interface InitiateTopupResponse {
   paymentTxnId: string;
@@ -236,7 +232,6 @@ export function PaymentMethodDialog({
             cta={walletCovers ? 'Pay & ticket' : creditCovers ? 'Pay via credit' : 'Top up needed'}
           />
 
-<<<<<<< HEAD
           {/* ICICI Eazypay card */}
           <PaymentMethodCard
             icon={CreditCard}
@@ -263,8 +258,6 @@ export function PaymentMethodDialog({
             cta="Continue to Orange PG"
           />
 
-=======
->>>>>>> 566bd27eb66c25e48cac612ba93cd29c96d1ddb7
           {/* PhonePe card */}
           <PaymentMethodCard
             icon={Smartphone}
